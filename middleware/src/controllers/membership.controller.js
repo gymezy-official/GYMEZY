@@ -15,6 +15,9 @@ import {
 } from '../services/cancellationNegotiation.service.js';
 import { ApiError } from '../utils/apiError.js';
 import { ApiResponse } from '../utils/apiResponse.js';
+import { getSearchTerm, escapeRegex } from '../utils/searchHelper.js';
+import { findOrCreateWalkInCustomer } from '../utils/walkInHelper.js';
+import { sanitizeDocument } from '../utils/responseTransformer.js';
 
 const TIER_DURATION_DAYS = {
   Monthly: 30,
@@ -59,8 +62,13 @@ const getTrainerTierFee = (trainer, tier) => {
  */
 const generateGymMembershipId = async (gym) => {
   const gymSeqKey = `mem_${gym.partnerId || gym._id}`;
-  const seq = await Counter.getNextSequence(gymSeqKey);
-  return `MEM00${seq}`;
+  let seq = await Counter.getNextSequence(gymSeqKey, 1);
+  let id = `MEM00${seq}`;
+  while (await Membership.exists({ gymId: gym._id, membershipId: id })) {
+    seq = await Counter.getNextSequence(gymSeqKey, 1);
+    id = `MEM00${seq}`;
+  }
+  return id;
 };
 
 /**
@@ -513,7 +521,7 @@ export const getMembershipById = async (req, res, next) => {
 export const getGymMemberships = async (req, res, next) => {
   try {
     const { gymId } = req.params;
-    const { status, tier, search, startDate, endDate, page = 1, limit = 50 } = req.query;
+    const { status, tier, search, source, startDate, endDate, page = 1, limit = 50 } = req.query;
 
     const isObjectId = mongoose.Types.ObjectId.isValid(gymId);
     const gym = await Gym.findOne(
@@ -527,10 +535,22 @@ export const getGymMemberships = async (req, res, next) => {
     // Build filter
     const filter = { gymId: gym._id };
     if (status && status !== 'All' && status !== 'ALL') {
-      filter.status = status;
+      if (status === 'Expiring Soon') {
+        const now = new Date();
+        const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+        filter.$or = [
+          { status: 'Expiring Soon' },
+          { status: 'Active', endDate: { $gte: now, $lte: in30Days } },
+        ];
+      } else {
+        filter.status = status;
+      }
     }
     if (tier && tier !== 'All' && tier !== 'ALL') {
       filter.membershipTier = tier;
+    }
+    if (source && source !== 'All' && source !== 'ALL') {
+      filter.source = source.toUpperCase();
     }
     if (startDate || endDate) {
       filter.createdAt = {};
@@ -541,19 +561,23 @@ export const getGymMemberships = async (req, res, next) => {
         filter.createdAt.$lte = end;
       }
     }
-    if (search && search.trim()) {
-      const searchRegex = new RegExp(search.trim(), 'i');
+    const searchTerm = getSearchTerm(req.query);
+    if (searchTerm) {
+      const escaped = escapeRegex(searchTerm);
+      const searchRegex = new RegExp(escaped, 'i');
       const matchingUsers = await User.find({
         $or: [
           { fullName: searchRegex },
           { phone: searchRegex },
           { email: searchRegex },
+          { customerId: searchRegex },
         ],
       }).select('_id');
       const userIds = matchingUsers.map((u) => u._id);
 
       filter.$or = [
         { membershipId: searchRegex },
+        { 'walkInDetails.bookedByName': searchRegex },
         { userId: { $in: userIds } },
       ];
     }
@@ -572,7 +596,7 @@ export const getGymMemberships = async (req, res, next) => {
     const now = new Date();
     const in30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
-    const [totalMembers, activeMembers, expiringThisMonth, expiredMembers] = await Promise.all([
+    const [totalMembers, activeMembers, expiringThisMonth, expiredMembers, cancelledMembers] = await Promise.all([
       Membership.countDocuments({ gymId: gym._id }),
       Membership.countDocuments({ gymId: gym._id, status: 'Active' }),
       Membership.countDocuments({
@@ -586,6 +610,7 @@ export const getGymMemberships = async (req, res, next) => {
         ],
       }),
       Membership.countDocuments({ gymId: gym._id, status: 'Expired' }),
+      Membership.countDocuments({ gymId: gym._id, status: 'Cancelled' }),
     ]);
 
     return res.status(200).json(ApiResponse.success({
@@ -596,11 +621,144 @@ export const getGymMemberships = async (req, res, next) => {
         active: activeMembers,
         expiringSoon: expiringThisMonth,
         expired: expiredMembers,
+        cancelled: cancelledMembers,
       },
       page: Number(page),
       limit: Number(limit),
       totalPages: Math.ceil(total / Number(limit)) || 1,
     }, 'Gym memberships retrieved successfully.'));
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Create Walk-in Membership at the Gym Counter (Desk POS)
+ * POST /api/v1/memberships/gym/:gymId/walk-in
+ */
+export const createWalkInMembership = async (req, res, next) => {
+  try {
+    const { gymId } = req.params;
+    const {
+      name,
+      customerName,
+      phone,
+      email,
+      tier = 'Monthly',
+      trainerId = null,
+      trainerSlot = null,
+      startDate,
+      endDate,
+      price,
+      amount,
+      trainerFee = 0,
+      paymentMethod = 'Cash',
+      paymentStatus = 'Completed',
+      notes = '',
+    } = req.body;
+
+    if (!phone) {
+      throw ApiError.badRequest('Customer phone number is required for walk-in membership.');
+    }
+
+    const targetName = name || customerName || 'Walk-in Member';
+
+    const isObjectId = mongoose.Types.ObjectId.isValid(gymId);
+    const gym = await Gym.findOne(
+      isObjectId ? { $or: [{ _id: gymId }, { partnerId: gymId }] } : { partnerId: gymId }
+    );
+    if (!gym) {
+      throw ApiError.notFound('Gym not found.');
+    }
+
+    // Find or create User by phone
+    const user = await findOrCreateWalkInCustomer({ fullName: targetName, phone, email });
+
+    // Clean tier & duration
+    let cleanTier = 'Monthly';
+    let durationDays = 30;
+    const tierLower = String(tier).toLowerCase();
+    if (tierLower.includes('annual') || tierLower.includes('year')) {
+      cleanTier = 'Annual';
+      durationDays = 365;
+    } else if (tierLower.includes('half')) {
+      cleanTier = 'Half Yearly';
+      durationDays = 180;
+    } else if (tierLower.includes('quarter')) {
+      cleanTier = 'Quarterly';
+      durationDays = 90;
+    }
+
+    const start = startDate ? new Date(startDate) : new Date();
+    const end = endDate ? new Date(endDate) : new Date(start.getTime() + durationDays * 24 * 60 * 60 * 1000);
+
+    const basePrice = Math.max(0, Number(price || amount) || 0);
+    const tFee = Math.max(0, Number(trainerFee) || 0);
+    const totalAmount = basePrice + tFee;
+
+    // Generate scoped membership ID: MEM00{counter}
+    const membershipId = await generateGymMembershipId(gym);
+
+    // Generate entry OTP
+    const entryOtp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    const normalizePayment = (method) => {
+      if (!method) return 'Cash';
+      const s = String(method).toLowerCase();
+      if (s.includes('card') || s === 'pos' || s === 'online') return 'Card';
+      if (s.includes('upi') || s === 'gpay') return 'UPI';
+      if (s.includes('cash') || s === 'cod') return 'Cash';
+      if (s.includes('wallet')) return 'Wallet';
+      if (s.includes('net') || s.includes('bank')) return 'Net Banking';
+      return method;
+    };
+
+    const membership = await Membership.create({
+      membershipId,
+      gymId: gym._id,
+      gymPartnerId: gym.partnerId,
+      userId: user._id,
+      trainerId: trainerId && mongoose.Types.ObjectId.isValid(trainerId) ? trainerId : null,
+      hasTrainer: Boolean(trainerId),
+      trainerSlot: trainerSlot || null,
+      membershipTier: cleanTier,
+      durationDays,
+      startDate: start,
+      endDate: end,
+      pricing: {
+        basePrice,
+        trainerFee: tFee,
+        totalAmount,
+        currency: 'INR',
+      },
+      payment: {
+        method: normalizePayment(paymentMethod),
+        status: paymentStatus || 'Completed',
+        transactionId: `WALK-MEM-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`,
+        walletAmountApplied: 0,
+        paidAt: new Date(),
+      },
+      status: 'Active',
+      source: 'WALK_IN',
+      walkInDetails: {
+        bookedBy: req.user?._id || null,
+        bookedByName: req.user?.fullName || req.user?.name || 'Front Desk Staff',
+        notes: notes || '',
+      },
+      entryOtp,
+    });
+
+    const populated = await Membership.findById(membership._id)
+      .populate('userId', 'fullName name email phone avatar customerId')
+      .populate('trainerId', 'name specialty avatar')
+      .lean();
+
+    return res.status(201).json(
+      ApiResponse.success(
+        sanitizeDocument(populated),
+        'Walk-in membership created and activated successfully.'
+      )
+    );
   } catch (error) {
     next(error);
   }
@@ -745,7 +903,12 @@ export const getAdminAllGymMemberships = async (req, res, next) => {
 export const cancelMembership = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { reason = 'Cancelled by member' } = req.body;
+    const {
+      reason = 'Cancelled by gym owner',
+      refundAmount,
+      deductionAmount,
+      notes = '',
+    } = req.body || {};
 
     const isObjectId = mongoose.Types.ObjectId.isValid(id);
     const query = isObjectId ? { $or: [{ _id: id }, { membershipId: id }] } : { membershipId: id };
@@ -759,8 +922,45 @@ export const cancelMembership = async (req, res, next) => {
       throw ApiError.badRequest('Membership is already cancelled.');
     }
 
+    // SSOT: Direct cancellation for WALK_IN members - no negotiation request or member approval needed
+    const isWalkIn = membership.source === 'WALK_IN' || Boolean(membership.walkInDetails);
+
+    if (isWalkIn) {
+      const totalPaid = Number(membership.pricing?.totalAmount || 0);
+      let calculatedRefund = 0;
+      if (refundAmount !== undefined && refundAmount !== null && refundAmount !== '') {
+        calculatedRefund = Math.max(0, Number(refundAmount) || 0);
+      } else if (deductionAmount !== undefined && deductionAmount !== null && deductionAmount !== '') {
+        calculatedRefund = Math.max(0, totalPaid - (Number(deductionAmount) || 0));
+      }
+
+      membership.status = 'Cancelled';
+      membership.cancellation = {
+        cancelledAt: new Date(),
+        reason: String(reason || 'Cancelled by gym owner').trim(),
+        refundAmount: calculatedRefund,
+        notes: String(notes || '').trim(),
+        cancelledBy: req.user?._id || req.user?.userId || null,
+        cancelledByName: req.user?.fullName || req.user?.name || 'Gym Admin',
+      };
+      await membership.save();
+
+      const populated = await Membership.findById(membership._id)
+        .populate('userId', 'fullName name email phone avatar customerId')
+        .populate('trainerId', 'name specialty avatar')
+        .lean();
+
+      return res.status(200).json(
+        ApiResponse.success(
+          sanitizeDocument(populated),
+          'Walk-in membership cancelled successfully and refund quote recorded.'
+        )
+      );
+    }
+
+    // App members go through standard cancellation negotiation
     return requestCancellationNegotiation(
-      { ...req, params: { id }, body: { reason } },
+      { ...req, params: { id }, body: { reason, refundAmount, deductionAmount, notes } },
       res,
       next
     );
@@ -781,6 +981,40 @@ export const requestCancellationNegotiation = async (req, res, next) => {
     if (!membership) throw ApiError.notFound('Membership not found.');
     if (membership.status === 'Cancelled') {
       throw ApiError.badRequest('Membership is already cancelled.');
+    }
+
+    // SSOT: If this is a walk-in member, cancel directly without creating a negotiation waiting for user approval
+    const isWalkIn = membership.source === 'WALK_IN' || Boolean(membership.walkInDetails);
+    if (isWalkIn) {
+      const totalPaid = Number(membership.pricing?.totalAmount || 0);
+      const refundAmount = req.body?.refundAmount !== undefined
+        ? Math.max(0, Number(req.body.refundAmount) || 0)
+        : (req.body?.deductionAmount !== undefined
+            ? Math.max(0, totalPaid - (Number(req.body.deductionAmount) || 0))
+            : totalPaid);
+
+      membership.status = 'Cancelled';
+      membership.cancellation = {
+        cancelledAt: new Date(),
+        reason,
+        refundAmount,
+        notes: String(req.body?.notes || '').trim(),
+        cancelledBy: req.user?._id || req.user?.userId || null,
+        cancelledByName: req.user?.fullName || req.user?.name || 'Gym Admin',
+      };
+      await membership.save();
+
+      const populated = await Membership.findById(membership._id)
+        .populate('userId', 'fullName name email phone avatar customerId')
+        .populate('trainerId', 'name specialty avatar')
+        .lean();
+
+      return res.status(200).json(
+        ApiResponse.success(
+          sanitizeDocument(populated),
+          'Walk-in membership cancelled directly without negotiation.'
+        )
+      );
     }
 
     const activeNegotiation = await MembershipCancellation.findOne({
@@ -814,10 +1048,38 @@ export const getMyCancellationNegotiations = async (req, res, next) => {
       req.user?._id ||
       req.query.userId ||
       req.query.user;
-    if (!userId) return res.status(200).json(ApiResponse.success([], 'Cancellation negotiations retrieved.'));
-    const filter = mongoose.Types.ObjectId.isValid(userId)
-      ? { userId: new mongoose.Types.ObjectId(userId) }
-      : { userId };
+    const rawMembershipId = req.query.membershipId;
+
+    let filter = null;
+
+    if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+      filter = { userId: new mongoose.Types.ObjectId(userId) };
+    } else if (userId) {
+      filter = { userId };
+    }
+
+    if (rawMembershipId) {
+      let resolvedMemId = null;
+      if (mongoose.Types.ObjectId.isValid(rawMembershipId)) {
+        resolvedMemId = new mongoose.Types.ObjectId(rawMembershipId);
+      } else {
+        const memDoc = await Membership.findOne({ membershipId: rawMembershipId }).select('_id').lean();
+        if (memDoc) resolvedMemId = memDoc._id;
+      }
+
+      if (resolvedMemId) {
+        if (filter) {
+          filter = { $or: [filter, { membershipId: resolvedMemId }] };
+        } else {
+          filter = { membershipId: resolvedMemId };
+        }
+      }
+    }
+
+    if (!filter) {
+      return res.status(200).json(ApiResponse.success([], 'Cancellation negotiations retrieved.'));
+    }
+
     const negotiations = await MembershipCancellation.find(filter)
       .populate('gymId', 'name partnerId logo address')
       .populate('membershipId', 'membershipId membershipTier startDate endDate pricing')
@@ -841,10 +1103,19 @@ export const getGymCancellationNegotiations = async (req, res, next) => {
     if (req.query.status) filter.status = req.query.status;
     const negotiations = await MembershipCancellation.find(filter)
       .populate('userId', 'fullName email phone avatar profilePicture')
-      .populate('membershipId', 'membershipId membershipTier startDate endDate pricing')
+      .populate('membershipId', 'membershipId membershipTier startDate endDate pricing source walkInDetails')
       .sort({ createdAt: -1 })
       .lean();
-    return res.status(200).json(ApiResponse.success({ negotiations, total: negotiations.length }, 'Gym cancellation negotiations retrieved successfully.'));
+
+    // Filter out walk-in members so cancellation negotiations only display user app members
+    const appOnlyNegotiations = negotiations.filter((item) => {
+      const mem = item.membershipId;
+      if (!mem) return false;
+      const isWalkIn = mem.source === 'WALK_IN' || Boolean(mem.walkInDetails);
+      return !isWalkIn;
+    });
+
+    return res.status(200).json(ApiResponse.success({ negotiations: appOnlyNegotiations, total: appOnlyNegotiations.length }, 'Gym cancellation negotiations retrieved successfully.'));
   } catch (error) {
     next(error);
   }
@@ -890,9 +1161,28 @@ export const gymOfferCancellationRefund = async (req, res, next) => {
 export const gymAcceptCancellation = async (req, res, next) => {
   try {
     const negotiation = await findNegotiation(req.params.requestId);
-    if (!['PENDING_GYM_APPROVAL', 'PENDING_MEMBER_APPROVAL'].includes(negotiation.status)) {
+    if (!['PENDING_GYM_APPROVAL', 'PENDING_MEMBER_APPROVAL', 'PENDING_GYM_ADMIN_APPROVAL'].includes(negotiation.status)) {
       throw ApiError.badRequest('This negotiation can no longer be updated.');
     }
+
+    const isGymOwner = req.user?.role === USER_ROLES.GYM_OWNER || req.user?.accessType === 'Admin';
+    let isManagerWithoutApproval = false;
+    if (!isGymOwner) {
+      const callerEmployee = await Employee.findOne({
+        $or: [{ phone: req.user?.phone }, { email: req.user?.email }, { userId: req.user?._id }],
+        gymId: negotiation.gymId,
+      });
+      if (callerEmployee?.managerPermissions?.requireCancellationApproval === false) {
+        isManagerWithoutApproval = true;
+      }
+    }
+
+    if (!isGymOwner && !isManagerWithoutApproval) {
+      negotiation.status = 'PENDING_GYM_ADMIN_APPROVAL';
+      await negotiation.save();
+      return res.status(200).json(ApiResponse.success(negotiation, 'Cancellation decision forwarded to Gym Admin for approval.'));
+    }
+
     const deductionAmount = Number(req.body.deductionAmount ?? negotiation.currentOffer?.deductionAmount ?? 0);
     if (!Number.isFinite(deductionAmount) || deductionAmount < 0 || deductionAmount > negotiation.maximumRefundAmount) {
       throw ApiError.badRequest(`Deduction must be between 0 and ${negotiation.maximumRefundAmount}.`);
@@ -1306,14 +1596,39 @@ export const gymActionReviewSwitchRequest = async (req, res, next) => {
     const reviewerId = req.user?.userId || req.user?.id || null;
 
     if (action === 'ACCEPT') {
-      request.status = 'PENDING_SUPER_ADMIN_APPROVAL';
-      request.gymApproval = {
-        status: 'ACCEPTED',
-        reviewedBy: reviewerId,
-        reviewerName,
-        reviewedAt: new Date(),
-        remarks: remarks || 'Accepted by Gym Owner',
-      };
+      const isGymOwner = req.user?.role === USER_ROLES.GYM_OWNER || req.user?.accessType === 'Admin';
+      let isManagerWithoutApproval = false;
+      if (!isGymOwner) {
+        const callerEmployee = await Employee.findOne({
+          $or: [{ phone: req.user?.phone }, { email: req.user?.email }, { userId: req.user?._id }],
+          gymId: request.gymId,
+        });
+        if (callerEmployee?.managerPermissions?.requirePlanSwitchApproval === false) {
+          isManagerWithoutApproval = true;
+        }
+      }
+
+      if (isGymOwner || isManagerWithoutApproval) {
+        // Direct ACID execution - no Super Admin required
+        const result = await ProrationEngine.executeApprovedSwitchTransaction({
+          switchRequestId: request._id,
+          approvedByUser: { _id: reviewerId, fullName: reviewerName },
+          remarks: remarks || 'Accepted and executed by Gym Admin',
+        });
+        return res.status(200).json(ApiResponse.success(result, 'Switch request approved and executed successfully.'));
+      } else {
+        // Staged for Gym Admin approval
+        request.status = 'PENDING_GYM_ADMIN_APPROVAL';
+        request.gymApproval = {
+          status: 'PENDING',
+          reviewedBy: reviewerId,
+          reviewerName,
+          reviewedAt: new Date(),
+          remarks: remarks || 'Submitted by Manager. Pending Gym Admin approval.',
+        };
+        await request.save();
+        return res.status(200).json(ApiResponse.success(request, 'Switch request forwarded to Gym Admin for final approval.'));
+      }
     } else {
       request.status = 'REJECTED_BY_GYM';
       request.gymApproval = {
@@ -1323,11 +1638,9 @@ export const gymActionReviewSwitchRequest = async (req, res, next) => {
         reviewedAt: new Date(),
         remarks: remarks || 'Rejected by Gym Owner',
       };
+      await request.save();
+      return res.status(200).json(ApiResponse.success(request, 'Switch request rejected.'));
     }
-
-    await request.save();
-
-    return res.status(200).json(ApiResponse.success(request, `Switch request ${action === 'ACCEPT' ? 'accepted and forwarded to Super Admin' : 'rejected'}.`));
   } catch (error) {
     next(error);
   }

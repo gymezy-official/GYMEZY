@@ -12,6 +12,8 @@ import {
   updateGymStatus,
   resubmitGymApplication,
   deleteGym,
+  getGymTransactions,
+  getGymDashboardStats,
 } from '../controllers/gym.controller.js';
 import {
   getGymReviews,
@@ -59,6 +61,15 @@ router.post('/:id/ratings', authenticate, addGymReview);
 // Authenticated: Submit a review for a specific trainer in a gym
 router.post('/:id/trainers/:trainerId/reviews', authenticate, addTrainerReview);
 router.post('/:id/trainers/:trainerId/ratings', authenticate, addTrainerReview);
+
+// Gym Owner & Admin: Scoped Financial Transactions & Payments Endpoint
+router.get('/:id/transactions', optionalAuthenticate, getGymTransactions);
+router.get('/:id/payments', optionalAuthenticate, getGymTransactions);
+
+// Gym Owner & Admin: Scoped Overview Dashboard Statistics & Recent Activity
+router.get('/:id/dashboard-stats', optionalAuthenticate, getGymDashboardStats);
+router.get('/:id/dashboard', optionalAuthenticate, getGymDashboardStats);
+router.get('/:id/overview', optionalAuthenticate, getGymDashboardStats);
 
 // Public / Authenticated Single Gym Details
 router.get('/:id', optionalAuthenticate, getGymById);

@@ -9,7 +9,10 @@ import Counter from '../models/counter.model.js';
 import { Wallet } from '../models/wallet.model.js';
 import { ApiError } from '../utils/apiError.js';
 import { ApiResponse } from '../utils/apiResponse.js';
+import { getSearchTerm, escapeRegex, parsePagination } from '../utils/searchHelper.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
+import { findOrCreateWalkInCustomer } from '../utils/walkInHelper.js';
+import { isBookingCompleted, evaluateBookingStatus, calculateBookingCancellationQuote } from '../services/bookingProration.service.js';
 
 /**
  * Resolve User ID from token or request body
@@ -72,8 +75,13 @@ const resolveGym = async (gymId) => {
 
 const generateGymBookingId = async (gym) => {
   const gymSeqKey = `bkg_${gym.partnerId || gym._id}`;
-  const seq = await Counter.getNextSequence(gymSeqKey, 100);
-  return `BK${seq}`;
+  let seq = await Counter.getNextSequence(gymSeqKey, 100);
+  let id = `BK${seq}`;
+  while (await Booking.exists({ gymId: gym._id, bookingId: id })) {
+    seq = await Counter.getNextSequence(gymSeqKey, 100);
+    id = `BK${seq}`;
+  }
+  return id;
 };
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -492,8 +500,9 @@ export const createBooking = asyncHandler(async (req, res) => {
 /**
  * Enrich booking with custom dates daily schedule, next session date, and OTP status
  */
-export const enrichBookingWithCustomSchedule = (b) => {
-  if (!b) return b;
+export const enrichBookingWithCustomSchedule = (rawB) => {
+  if (!rawB) return rawB;
+  const b = rawB.toObject ? rawB.toObject() : (rawB._doc ? { ...rawB._doc } : { ...rawB });
   const isCustom = Boolean(b.isCustomDates || (Array.isArray(b.customDates) && b.customDates.length > 0));
   if (!isCustom) {
     return { ...b, isTodayValid: true };
@@ -575,13 +584,13 @@ export const getMyBookings = asyncHandler(async (req, res) => {
 
   const now = new Date();
   const resolvedBookings = (bookings || []).map((b) => {
-    if (b.status === 'Upcoming' && b.startDate) {
-      const sDay = new Date(b.startDate);
-      sDay.setHours(0, 0, 0, 0);
-      const eDay = b.endDate ? new Date(b.endDate) : null;
-      if (eDay) eDay.setHours(23, 59, 59, 999);
-      if (sDay <= now && (!eDay || eDay >= now)) {
+    if (b.status !== 'Cancelled' && b.status !== 'Cancellation_Requested' && b.status !== 'Completed') {
+      if (isBookingCompleted(b, now)) {
+        b.status = 'Completed';
+        if (b._id) Booking.updateOne({ _id: b._id }, { $set: { status: 'Completed' } }).catch(() => {});
+      } else if (b.status === 'Upcoming' && b.startDate && new Date(b.startDate) <= now) {
         b.status = 'Active';
+        if (b._id) Booking.updateOne({ _id: b._id }, { $set: { status: 'Active' } }).catch(() => {});
       }
     }
     return enrichBookingWithCustomSchedule(b);
@@ -632,19 +641,253 @@ export const getBookingById = asyncHandler(async (req, res) => {
  */
 export const getGymBookings = asyncHandler(async (req, res) => {
   const { gymId } = req.params;
+  const { source, status, bookingType } = req.query;
   const isObjectId = mongoose.Types.ObjectId.isValid(gymId);
-  const filter = isObjectId ? { gymId } : { gymId };
 
-  const bookings = await Booking.find(filter)
-    .populate('userId', 'name email phone avatar customerId')
+  const gym = await Gym.findOne(
+    isObjectId ? { $or: [{ _id: gymId }, { partnerId: gymId }] } : { partnerId: gymId }
+  );
+  if (!gym) {
+    throw ApiError.notFound('Gym not found.');
+  }
+
+  const filter = { gymId: gym._id };
+  if (source && source !== 'ALL' && source !== 'All') {
+    filter.source = source.toUpperCase();
+  }
+  if (status && status !== 'ALL' && status !== 'All') {
+    filter.status = status;
+  }
+  if (bookingType && bookingType !== 'ALL' && bookingType !== 'All') {
+    filter.bookingType = bookingType;
+  }
+
+  const searchTerm = getSearchTerm(req.query);
+  if (searchTerm) {
+    const escaped = escapeRegex(searchTerm);
+    const regex = new RegExp(escaped, 'i');
+
+    const matchingUsers = await User.find({
+      $or: [
+        { fullName: regex },
+        { phone: regex },
+        { email: regex },
+        { customerId: regex },
+      ],
+    }).select('_id').lean();
+    const userIds = matchingUsers.map((u) => u._id);
+
+    filter.$or = [
+      { bookingId: regex },
+      { title: regex },
+      { planName: regex },
+      { 'walkInDetails.name': regex },
+      { 'walkInDetails.phone': regex },
+      { 'walkInDetails.email': regex },
+      { userId: { $in: userIds } },
+    ];
+  }
+
+  const { page, limit, skip, isFetchAll } = parsePagination(req.query, 10);
+  const totalBookings = await Booking.countDocuments(filter);
+  const totalPages = limit > 0 ? Math.ceil(totalBookings / limit) : 1;
+
+  const queryBuilder = Booking.find(filter)
+    .populate('userId', 'fullName name email phone avatar customerId')
     .sort({ createdAt: -1 });
 
-  const enriched = bookings.map((b) => enrichBookingWithCustomSchedule(b));
-  return res.status(200).json(ApiResponse.success(enriched, 'Gym bookings retrieved successfully'));
+  if (!isFetchAll && limit > 0) {
+    queryBuilder.skip(skip).limit(limit);
+  }
+
+  const bookings = await queryBuilder.lean();
+  const now = new Date();
+  const enriched = bookings.map((b) => {
+    if (b.status !== 'Cancelled' && b.status !== 'Cancellation_Requested' && b.status !== 'Completed') {
+      if (isBookingCompleted(b, now)) {
+        b.status = 'Completed';
+        if (b._id) Booking.updateOne({ _id: b._id }, { $set: { status: 'Completed' } }).catch(() => {});
+      } else if (b.status === 'Upcoming' && b.startDate && new Date(b.startDate) <= now) {
+        b.status = 'Active';
+        if (b._id) Booking.updateOne({ _id: b._id }, { $set: { status: 'Active' } }).catch(() => {});
+      }
+    }
+    return enrichBookingWithCustomSchedule(b);
+  });
+  return res.status(200).json(
+    ApiResponse.success(
+      enriched,
+      'Gym bookings retrieved successfully',
+      200,
+      {
+        total: totalBookings,
+        page,
+        limit,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1,
+      }
+    )
+  );
 });
 
 /**
- * Cancel Booking
+ * Create Walk-in Booking at the Gym Counter (Desk POS)
+ * POST /api/v1/bookings/gym/:gymId/walk-in
+ */
+export const createWalkInBooking = asyncHandler(async (req, res) => {
+  const { gymId } = req.params;
+  const {
+    name,
+    customerName,
+    phone,
+    email,
+    bookingType = 'GYM_SESSION',
+    title,
+    sectionId = null,
+    trainerId = null,
+    startDate,
+    endDate,
+    timeSlot,
+    price = 0,
+    amount = 0,
+    customDates = [],
+    isCustomDates = false,
+    paymentMethod = 'Cash',
+    paymentStatus = 'Completed',
+    checkInNow = false,
+    notes = '',
+  } = req.body;
+
+  if (!phone) {
+    throw ApiError.badRequest('Customer phone number is required for walk-in booking.');
+  }
+
+  const targetName = name || customerName || 'Walk-in Visitor';
+
+  // Resolve Gym
+  const isObjectId = mongoose.Types.ObjectId.isValid(gymId);
+  const gym = await Gym.findOne(
+    isObjectId ? { $or: [{ _id: gymId }, { partnerId: gymId }] } : { partnerId: gymId }
+  );
+  if (!gym) {
+    throw ApiError.notFound('Gym facility not found.');
+  }
+
+  // Find or create User by phone
+  const user = await findOrCreateWalkInCustomer({ fullName: targetName, phone, email });
+
+  // Generate Booking ID: BK{counter}
+  const bookingId = await generateGymBookingId(gym);
+
+  // Generate 6-digit entry OTP & QR code data
+  const entryOtp = Math.floor(100000 + Math.random() * 900000).toString();
+  const qrCodeData = `GYMEZY:${gym.partnerId || gym._id}:${bookingId}:${entryOtp}`;
+
+  const finalPrice = Math.max(0, Number(price || amount) || 0);
+  const now = new Date();
+  const sessionStartDate = startDate ? new Date(startDate) : now;
+  const sessionEndDate = endDate ? new Date(endDate) : sessionStartDate;
+
+  const initialStatus = checkInNow ? 'Active' : 'Upcoming';
+  const attendanceHistory = checkInNow
+    ? [{ attendedAt: now, method: 'Front Desk Walk-In', area: 'Main Gate' }]
+    : [];
+
+  const hasCustomDates = Boolean(isCustomDates || (Array.isArray(customDates) && customDates.length > 0));
+  const parsedCustomDates = Array.isArray(customDates)
+    ? customDates.map((d) => ({
+        date: typeof d === 'string' ? new Date(d) : (d.date ? new Date(d.date) : new Date()),
+        status: 'Scheduled',
+        dailyOtp: Math.floor(100000 + Math.random() * 900000).toString(),
+      }))
+    : [];
+
+  const normalizePayment = (method) => {
+    if (!method) return 'Cash';
+    const s = String(method).toLowerCase();
+    if (s.includes('card') || s === 'pos' || s === 'online') return 'Card';
+    if (s.includes('upi') || s === 'gpay') return 'UPI';
+    if (s.includes('cash') || s === 'cod') return 'Cash';
+    if (s.includes('wallet')) return 'Wallet';
+    if (s.includes('net') || s.includes('bank')) return 'Net Banking';
+    return method;
+  };
+
+  const newBooking = await Booking.create({
+    bookingId,
+    userId: user._id,
+    gymId: gym._id,
+    sectionId: sectionId && mongoose.Types.ObjectId.isValid(sectionId) ? sectionId : null,
+    trainerId: trainerId && mongoose.Types.ObjectId.isValid(trainerId) ? trainerId : null,
+    bookingType: bookingType === 'GROUP_CLASS' ? 'GROUP_CLASS' : 'GYM_SESSION',
+    title: title || (bookingType === 'GROUP_CLASS' ? 'Group Class Walk-In' : 'Gym Session Walk-In'),
+    startDate: sessionStartDate,
+    endDate: sessionEndDate,
+    timeSlot: timeSlot || 'General Access',
+    isCustomDates: hasCustomDates,
+    customDates: parsedCustomDates,
+    pricing: {
+      subtotal: finalPrice,
+      discount: 0,
+      totalAmount: finalPrice,
+      currency: 'INR',
+    },
+    payment: {
+      method: normalizePayment(paymentMethod),
+      status: paymentStatus || 'Completed',
+      transactionId: `WALK-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`,
+      paidAt: now,
+    },
+    entryOtp,
+    qrCodeData,
+    status: initialStatus,
+    source: 'WALK_IN',
+    walkInDetails: {
+      bookedBy: req.user?._id || null,
+      bookedByName: req.user?.fullName || req.user?.name || 'Front Desk Staff',
+      notes: notes || '',
+    },
+    attendedSessionsCount: checkInNow ? 1 : 0,
+    attendanceHistory,
+  });
+
+  const populated = await Booking.findById(newBooking._id)
+    .populate('userId', 'fullName name email phone avatar customerId')
+    .lean();
+
+  return res.status(201).json(
+    ApiResponse.success(
+      enrichBookingWithCustomSchedule(populated),
+      checkInNow
+        ? 'Walk-in booking created and customer checked in successfully.'
+        : 'Walk-in booking created successfully.'
+    )
+  );
+});
+
+/**
+ * Get Cancellation Quote (Preview)
+ * GET /api/v1/bookings/:id/cancellation-quote
+ */
+export const getBookingCancellationQuote = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const isObjectId = mongoose.Types.ObjectId.isValid(id);
+
+  const booking = await Booking.findOne(
+    isObjectId ? { $or: [{ _id: id }, { bookingId: id }] } : { bookingId: id }
+  );
+
+  if (!booking) {
+    throw ApiError.notFound('Booking not found.');
+  }
+
+  const quote = calculateBookingCancellationQuote(booking, new Date());
+  return res.status(200).json(ApiResponse.success(quote, 'Cancellation quote calculated successfully'));
+});
+
+/**
+ * Cancel Booking (Pre-start Full Refund or In-Progress Request to Gym Owner)
  * PATCH /api/v1/bookings/:id/cancel
  */
 export const cancelBooking = asyncHandler(async (req, res) => {
@@ -664,28 +907,163 @@ export const cancelBooking = asyncHandler(async (req, res) => {
     throw ApiError.badRequest('This booking is already cancelled.');
   }
 
-  booking.status = 'Cancelled';
+  if (booking.status === 'Cancellation_Requested') {
+    throw ApiError.badRequest('A cancellation request for this booking is already pending Gym Owner review.');
+  }
+
+  const now = new Date();
+  if (booking.status === 'Completed' || isBookingCompleted(booking, now)) {
+    if (booking.status !== 'Completed') {
+      booking.status = 'Completed';
+      await booking.save();
+    }
+    throw ApiError.badRequest('Cannot cancel a completed booking. This session has already ended.');
+  }
+
+  const quote = calculateBookingCancellationQuote(booking, now);
+  if (!quote.canCancel) {
+    throw ApiError.badRequest(quote.policyNotice || 'This booking cannot be cancelled.');
+  }
+
+  const isWalkIn = booking.source === 'WALK_IN';
+  const callerIsOwner = req.user?.role === 'GYM_OWNER' || req.user?.role === 'ADMIN' || req.user?.role === 'SUPER_ADMIN';
+
+  // Case A: Pre-start cancellation (now < startDate) OR Walk-in direct cancellation by Gym Owner
+  if (!quote.requiresGymApproval || isWalkIn || callerIsOwner) {
+    booking.status = 'Cancelled';
+    booking.cancellation = {
+      cancelledAt: now,
+      reason: (reason || '').trim(),
+      refundAmount: quote.refundAmount,
+      deductedAmount: quote.deductedAmount,
+      consumedDays: quote.consumedDays,
+      totalDays: quote.totalDays,
+      refundStatus: quote.refundAmount > 0 ? 'INITIATED' : 'NONE',
+      cancellationStatus: 'DIRECT_CANCELLED',
+      requestedAt: now,
+      reviewedAt: now,
+      reviewedBy: req.user?._id || null,
+      rejectionReason: '',
+    };
+
+    await booking.save();
+
+    // Atomically decrement section enrolledCount if this was a section booking
+    if (booking.sectionId) {
+      await Section.findOneAndUpdate(
+        { _id: booking.sectionId, enrolledCount: { $gt: 0 } },
+        { $inc: { enrolledCount: -1 } }
+      );
+    }
+
+    const updatedBooking = await Booking.findById(booking._id)
+      .populate('gymId', 'name partnerId address images imageUrl logo contactPhone location')
+      .populate('sectionId', 'title category startTime endTime durationDays activeDays trainerId maxCapacity enrolledCount')
+      .populate('trainerId', 'name specialization avatar employeeId phone');
+
+    const successMsg = quote.refundAmount > 0
+      ? `Booking cancelled. A refund of ₹${quote.refundAmount} has been initiated to your original payment method (5-7 business days).`
+      : 'Booking cancelled successfully.';
+
+    return res.status(200).json(ApiResponse.success(updatedBooking, successMsg));
+  }
+
+  // Case B: In-progress / partially consumed booking by app user -> Requires Gym Owner review
+  booking.status = 'Cancellation_Requested';
   booking.cancellation = {
-    cancelledAt: new Date(),
+    cancelledAt: null,
     reason: (reason || '').trim(),
+    refundAmount: quote.refundAmount,
+    deductedAmount: quote.deductedAmount,
+    consumedDays: quote.consumedDays,
+    totalDays: quote.totalDays,
+    refundStatus: 'NONE',
+    cancellationStatus: 'PENDING_GYM_APPROVAL',
+    requestedAt: now,
+    reviewedAt: null,
+    reviewedBy: null,
+    rejectionReason: '',
   };
 
   await booking.save();
-
-  // Atomically decrement section enrolledCount if this was a section booking
-  if (booking.sectionId) {
-    await Section.findOneAndUpdate(
-      { _id: booking.sectionId, enrolledCount: { $gt: 0 } },
-      { $inc: { enrolledCount: -1 } }
-    );
-  }
 
   const updatedBooking = await Booking.findById(booking._id)
     .populate('gymId', 'name partnerId address images imageUrl logo contactPhone location')
     .populate('sectionId', 'title category startTime endTime durationDays activeDays trainerId maxCapacity enrolledCount')
     .populate('trainerId', 'name specialization avatar employeeId phone');
 
-  return res.status(200).json(ApiResponse.success(updatedBooking, 'Booking cancelled successfully'));
+  return res.status(200).json(ApiResponse.success(
+    updatedBooking,
+    `Cancellation request submitted to Gym Owner. Deducted ₹${quote.deductedAmount} for ${quote.consumedDays} consumed day(s). Net refund of ₹${quote.refundAmount} is pending approval.`
+  ));
+});
+
+/**
+ * Review Booking Cancellation Request (Gym Owner & Admin)
+ * PATCH /api/v1/bookings/:id/cancellation-review
+ */
+export const reviewBookingCancellation = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { action, rejectionReason = '' } = req.body; // action: 'ACCEPT' | 'REJECT'
+  const isObjectId = mongoose.Types.ObjectId.isValid(id);
+
+  if (!action || !['ACCEPT', 'REJECT'].includes(action.toUpperCase())) {
+    throw ApiError.badRequest('Action must be either ACCEPT or REJECT.');
+  }
+
+  const booking = await Booking.findOne(
+    isObjectId ? { $or: [{ _id: id }, { bookingId: id }] } : { bookingId: id }
+  );
+
+  if (!booking) {
+    throw ApiError.notFound('Booking not found.');
+  }
+
+  if (booking.status !== 'Cancellation_Requested' || booking.cancellation?.cancellationStatus !== 'PENDING_GYM_APPROVAL') {
+    throw ApiError.badRequest('This booking does not have a pending cancellation request.');
+  }
+
+  const now = new Date();
+  const upperAction = action.toUpperCase();
+
+  if (upperAction === 'ACCEPT') {
+    booking.status = 'Cancelled';
+    booking.cancellation.cancelledAt = now;
+    booking.cancellation.reviewedAt = now;
+    booking.cancellation.reviewedBy = req.user?._id || null;
+    booking.cancellation.cancellationStatus = 'APPROVED';
+    booking.cancellation.refundStatus = booking.cancellation.refundAmount > 0 ? 'INITIATED' : 'NONE';
+    booking.cancellation.rejectionReason = '';
+
+    await booking.save();
+
+    // Decrement section capacity if applicable
+    if (booking.sectionId) {
+      await Section.findOneAndUpdate(
+        { _id: booking.sectionId, enrolledCount: { $gt: 0 } },
+        { $inc: { enrolledCount: -1 } }
+      );
+    }
+
+    return res.status(200).json(ApiResponse.success(
+      booking,
+      `Cancellation request accepted. Prorated refund of ₹${booking.cancellation.refundAmount} has been initiated to original payment method.`
+    ));
+  } else {
+    // REJECT: Revert back to Active so member can use remaining days
+    booking.status = 'Active';
+    booking.cancellation.cancellationStatus = 'REJECTED';
+    booking.cancellation.reviewedAt = now;
+    booking.cancellation.reviewedBy = req.user?._id || null;
+    booking.cancellation.rejectionReason = (rejectionReason || 'Rejected by gym owner').trim();
+
+    await booking.save();
+
+    return res.status(200).json(ApiResponse.success(
+      booking,
+      'Cancellation request rejected. Booking has returned to Active status for remaining sessions.'
+    ));
+  }
 });
 
 /**

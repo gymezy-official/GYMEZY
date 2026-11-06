@@ -8,6 +8,7 @@ import Gym from '../models/gym.model.js';
 import { autoCheckoutStaleRecords } from '../services/attendanceCron.service.js';
 import { ApiError } from '../utils/apiError.js';
 import { ApiResponse } from '../utils/apiResponse.js';
+import { getSearchTerm, escapeRegex } from '../utils/searchHelper.js';
 
 /**
  * Resolve Gym by ID or partnerId
@@ -642,23 +643,33 @@ export const getTodayAttendance = async (req, res, next) => {
  */
 export const searchGymMembersForCheckIn = async (req, res, next) => {
   try {
-    const { gymId, query = '' } = req.query;
+    const { gymId } = req.query;
+    const searchTerm = getSearchTerm(req.query) || (req.query.query ? String(req.query.query).trim() : '');
     if (!gymId) {
       throw ApiError.badRequest('Gym ID is required.');
     }
 
     const gym = await resolveGym(gymId);
 
-    const memberships = await Membership.find({
-      gymId: gym._id,
-      status: { $in: ['Active', 'Upcoming', 'Expiring Soon'] },
-    })
-      .populate('userId', 'fullName phone email avatar profilePicture customerId')
-      .sort({ createdAt: -1 })
-      .lean();
+    const [memberships, bookings] = await Promise.all([
+      Membership.find({
+        gymId: gym._id,
+        status: { $in: ['Active', 'Upcoming', 'Expiring Soon'] },
+      })
+        .populate('userId', 'fullName phone email avatar profilePicture customerId')
+        .sort({ createdAt: -1 })
+        .lean(),
+      Booking.find({
+        gymId: gym._id,
+        status: { $in: ['Confirmed', 'Active', 'Upcoming', 'Pending'] },
+      })
+        .populate('userId', 'fullName phone email avatar profilePicture customerId')
+        .sort({ createdAt: -1 })
+        .lean(),
+    ]);
 
-    const q = query.trim().toLowerCase();
-    const filtered = memberships
+    const q = searchTerm.toLowerCase();
+    const filteredMemberships = memberships
       .filter((m) => {
         if (!q) return true;
         const name = m.userId?.fullName?.toLowerCase() || '';
@@ -684,9 +695,40 @@ export const searchGymMembersForCheckIn = async (req, res, next) => {
         avatar: m.userId?.avatar || m.userId?.profilePicture || null,
         gymBranch: gym.name,
         entryOtp: m.entryOtp || null,
+        source: m.source || 'APP',
       }));
 
-    return res.status(200).json(ApiResponse.success(filtered, 'Gym members retrieved successfully.'));
+    const filteredBookings = bookings
+      .filter((b) => {
+        if (!q) return true;
+        const name = b.userId?.fullName?.toLowerCase() || '';
+        const phone = b.userId?.phone || '';
+        const bId = b.bookingId?.toLowerCase() || '';
+        const otp = b.entryOtp || '';
+        return name.includes(q) || phone.includes(q) || bId.includes(q) || otp.includes(q);
+      })
+      .map((b) => ({
+        key: b._id.toString(),
+        bookingDbId: b._id.toString(),
+        name: b.userId?.fullName || 'Walk-in / App Visitor',
+        phone: b.userId?.phone || 'N/A',
+        userId: b.userId?._id?.toString() || 'N/A',
+        customerId: b.userId?.customerId || b.userId?._id?.toString().slice(-8) || 'N/A',
+        membershipId: b.bookingId,
+        bookingId: b.bookingId,
+        plan: b.bookingType === 'GROUP_CLASS' ? 'Group Class Pass' : 'Gym Session Pass',
+        status: (b.status === 'Confirmed' ? 'ACTIVE' : b.status).toUpperCase(),
+        startDate: b.startDate,
+        endDate: b.endDate || b.startDate,
+        planExpiry: b.startDate ? new Date(b.startDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Today',
+        avatar: b.userId?.avatar || b.userId?.profilePicture || null,
+        gymBranch: gym.name,
+        entryOtp: b.entryOtp || null,
+        source: b.source || 'APP',
+      }));
+
+    const combined = [...filteredMemberships, ...filteredBookings];
+    return res.status(200).json(ApiResponse.success(combined, 'Gym members retrieved successfully.'));
   } catch (error) {
     next(error);
   }

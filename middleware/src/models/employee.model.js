@@ -78,6 +78,12 @@ const employeeSchema = new mongoose.Schema(
       lowercase: true,
       default: '',
     },
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+      index: true,
+    },
     avatar: {
       type: String,
       default: '',
@@ -103,6 +109,14 @@ const employeeSchema = new mongoose.Schema(
       default: 'Employee',
     },
 
+    // Granular permissions for Manager roles (delegated by Gym Admin)
+    managerPermissions: {
+      requireStaffApproval: { type: Boolean, default: true },
+      requirePlanSwitchApproval: { type: Boolean, default: true },
+      requireCancellationApproval: { type: Boolean, default: true },
+      requireProfileEditApproval: { type: Boolean, default: true },
+    },
+
     // Status & Approval State
     status: {
       type: String,
@@ -118,17 +132,22 @@ const employeeSchema = new mongoose.Schema(
     approvalStatus: {
       type: String,
       enum: ['Pending Approval', 'Approved', 'Rejected'],
-      default: 'Pending Approval',
+      default: 'Approved',
       index: true,
     },
     pendingAction: {
       type: String,
       enum: ['NEW_EMPLOYEE', 'EDIT_DETAILS', 'DEACTIVATION', 'NONE'],
-      default: 'NEW_EMPLOYEE',
+      default: 'NONE',
     },
     pendingChanges: {
       type: mongoose.Schema.Types.Mixed,
-      default: null, // Stores draft changes before Super Admin approval
+      default: null, // Stores draft changes before Gym Admin approval
+    },
+    submittedByManager: {
+      managerId: { type: mongoose.Schema.Types.Mixed, default: null },
+      managerName: { type: String, default: '' },
+      submittedAt: { type: Date, default: null },
     },
     adminRemarks: {
       type: String,

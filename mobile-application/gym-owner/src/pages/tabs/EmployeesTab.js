@@ -21,6 +21,9 @@ import { useToast } from '../../widgets/CustomScaffoldMessage';
 import { useAuth } from '../../context/AuthContext';
 import { apiService } from '../../services/apiService';
 import { getSafeImageUri } from '../../utils/mediaUtils';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useDebounce } from '../../hooks/useDebounce';
+import { AddTempStaffModal } from '../../widgets/AddTempStaffModal';
 import {
   AddEmployeeModal,
   AVAILABLE_SERVICES,
@@ -30,6 +33,7 @@ import {
 const FILTER_TABS = ['All', 'Trainers', 'Floor Staff', 'Part-Time', 'Temporary', 'Pending Approval'];
 
 export const EmployeesTab = ({ topInset, navigation }) => {
+  const insets = useSafeAreaInsets();
   const { isDark } = useTheme();
   const { showToast } = useToast();
   const { gym } = useAuth();
@@ -45,25 +49,63 @@ export const EmployeesTab = ({ topInset, navigation }) => {
   const [selectedEmployee, setSelectedEmployee] = useState(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [editingEmployee, setEditingEmployee] = useState(null);
+  const [showTempStaffModal, setShowTempStaffModal] = useState(false);
 
+  // Pagination State (SSOT Server Pagination)
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
+  const [metrics, setMetrics] = useState(null);
 
-  // Fetch Employees
+  const debouncedSearch = useDebounce(searchQuery, 300);
+
+  // Reset to page 1 on search or filter change
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, activeTab]);
+
+  // Fetch Employees from Middleware (SSOT Server Search & Pagination)
   const fetchEmployees = useCallback(async () => {
     try {
       const targetGymId = gym?._id || gym?.partnerId;
-      const res = await apiService.getEmployees({
+      if (!targetGymId) return;
+
+      const params = {
         gymId: targetGymId,
-        limit: 'all',
-      });
+        page,
+        limit: 10,
+      };
+
+      if (debouncedSearch && debouncedSearch.trim()) {
+        params.search = debouncedSearch.trim();
+      }
+
+      if (activeTab === 'Trainers') {
+        params.role = 'Trainer';
+      } else if (activeTab === 'Pending Approval') {
+        params.approvalStatus = 'Pending Approval';
+      } else if (activeTab === 'Part-Time') {
+        params.type = 'Part-Time';
+      } else if (activeTab === 'Temporary') {
+        params.type = 'Temporary';
+      }
+
+      const res = await apiService.getEmployees(params);
       const list = res?.employees || (Array.isArray(res) ? res : []);
       setEmployees(list);
+      setTotalPages(res?.pagination?.totalPages || res?.totalPages || Math.ceil((res?.total || list.length) / 10) || 1);
+      setTotalCount(res?.pagination?.total ?? res?.total ?? list.length);
+      if (res?.summary) {
+        setMetrics(res.summary);
+      }
     } catch (err) {
       console.warn('Employees fetch warning:', err.message);
     } finally {
       setIsLoading(false);
       setRefreshing(false);
     }
-  }, [gym?._id, gym?.partnerId]);
+  }, [gym?._id, gym?.partnerId, debouncedSearch, activeTab, page]);
 
   useEffect(() => {
     fetchEmployees();
@@ -74,51 +116,39 @@ export const EmployeesTab = ({ topInset, navigation }) => {
     fetchEmployees();
   };
 
-  // Metrics
+  // Metrics (Gym-Wide Summary with current fallback)
   const trainersCount = useMemo(() => {
+    if (metrics?.trainersCount !== undefined) return metrics.trainersCount;
     return employees.filter((e) => {
       const roleStr = (e.role || '').toLowerCase();
       return roleStr.includes('trainer') || roleStr.includes('coach');
     }).length;
-  }, [employees]);
+  }, [metrics, employees]);
 
   const staffCount = useMemo(() => {
+    if (metrics?.staffCount !== undefined) return metrics.staffCount;
     return employees.filter((e) => {
       const roleStr = (e.role || '').toLowerCase();
       return !roleStr.includes('trainer') && !roleStr.includes('coach');
     }).length;
-  }, [employees]);
+  }, [metrics, employees]);
 
   const pendingCount = useMemo(() => {
+    if (metrics?.pendingCount !== undefined) return metrics.pendingCount;
     return employees.filter((e) => e.approvalStatus === 'Pending Approval').length;
-  }, [employees]);
+  }, [metrics, employees]);
 
-  // Filtered List
+  // Filtered List (Server-filtered with Floor Staff client-side guard)
   const filteredEmployees = useMemo(() => {
     return employees.filter((emp) => {
-      // Tab filter
-      const roleStr = (emp.role || '').toLowerCase();
-      const isTrainer = roleStr.includes('trainer') || roleStr.includes('coach');
-
-      if (activeTab === 'Trainers' && !isTrainer) return false;
-      if (activeTab === 'Floor Staff' && isTrainer) return false;
-      if (activeTab === 'Part-Time' && emp.type !== 'Part-Time') return false;
-      if (activeTab === 'Temporary' && emp.type !== 'Temporary') return false;
-      if (activeTab === 'Pending Approval' && emp.approvalStatus !== 'Pending Approval') return false;
-
-      // Search query
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
-        const nameMatch = (emp.name || '').toLowerCase().includes(q);
-        const roleMatch = (emp.role || '').toLowerCase().includes(q);
-        const idMatch = (emp.employeeId || '').toLowerCase().includes(q);
-        const phoneMatch = (emp.phone || '').toLowerCase().includes(q);
-        if (!nameMatch && !roleMatch && !idMatch && !phoneMatch) return false;
+      if (activeTab === 'Floor Staff') {
+        const roleStr = (emp.role || '').toLowerCase();
+        const isTrainer = roleStr.includes('trainer') || roleStr.includes('coach');
+        if (isTrainer) return false;
       }
-
       return true;
     });
-  }, [employees, activeTab, searchQuery]);
+  }, [employees, activeTab]);
 
 
 
@@ -165,6 +195,23 @@ export const EmployeesTab = ({ topInset, navigation }) => {
     );
   };
 
+  const handleReviewApproval = async (action) => {
+    if (!selectedEmployee) return;
+    try {
+      const empId = selectedEmployee._id || selectedEmployee.id;
+      await apiService.reviewEmployeeApproval(empId, action, action === 'reject' ? 'Rejected by Gym Admin' : '');
+      showToast({
+        message: action === 'approve' ? 'Employee approved successfully!' : 'Employee approval rejected.',
+        isSuccess: true,
+      });
+      setShowDetailModal(false);
+      setSelectedEmployee(null);
+      await fetchEmployees();
+    } catch (err) {
+      showToast({ message: err.message || `Failed to ${action} employee.`, isError: true });
+    }
+  };
+
   // Contact actions
   const handleCall = (phone) => {
     if (!phone) return;
@@ -176,29 +223,53 @@ export const EmployeesTab = ({ topInset, navigation }) => {
 
   return (
     <View style={[styles.container, { backgroundColor: isDark ? AppColors.darkBackground : AppColors.lightBackground }]}>
-      {/* 1. Header */}
+      {/* 1. Header with Dual Action Buttons (Add Employee & Add Temp / Part-Time) */}
       <View style={[styles.headerRow, { paddingTop: topInset + 12 }]}>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.headerTitle, { color: isDark ? '#FFFFFF' : '#0F172A' }]}>
-            Staff & Employees
-          </Text>
-          <Text style={[styles.headerSubtitle, { color: isDark ? 'rgba(255,255,255,0.6)' : '#64748B' }]}>
-            {employees.length} team members configured
-          </Text>
+        <View style={styles.headerTopRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.headerTitle, { color: isDark ? '#FFFFFF' : '#0F172A' }]}>
+              Staff & Employees
+            </Text>
+            <Text style={[styles.headerSubtitle, { color: isDark ? 'rgba(255,255,255,0.6)' : '#64748B' }]}>
+              {employees.length} team members configured
+            </Text>
+          </View>
         </View>
 
-        <TouchableOpacity
-          style={styles.addEmployeeBtn}
-          onPress={() => setShowAddModal(true)}
-          activeOpacity={0.85}
-        >
-          <MaterialIcons name="person-add" size={17} color="#FFFFFF" />
-          <Text style={styles.addEmployeeBtnText}>Add Employee</Text>
-        </TouchableOpacity>
+        <View style={styles.headerActionRow}>
+          <TouchableOpacity
+            style={[
+              styles.addTempStaffBtn,
+              {
+                backgroundColor: isDark ? 'rgba(124, 58, 237, 0.16)' : '#F5F3FF',
+                borderColor: isDark ? 'rgba(124, 58, 237, 0.45)' : '#DDD6FE',
+              },
+            ]}
+            onPress={() => setShowTempStaffModal(true)}
+            activeOpacity={0.85}
+          >
+            <MaterialIcons name="group-add" size={16} color={isDark ? '#C084FC' : '#7C3AED'} />
+            <Text style={[styles.addTempStaffBtnText, { color: isDark ? '#C084FC' : '#7C3AED' }]}>
+              + Temp / Part-Time
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.addEmployeeBtn}
+            onPress={() => {
+              setEditingEmployee(null);
+              setShowAddModal(true);
+            }}
+            activeOpacity={0.85}
+          >
+            <MaterialIcons name="person-add" size={16} color="#FFFFFF" />
+            <Text style={styles.addEmployeeBtnText}>+ Add Employee</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: 170 + Math.max(insets.bottom, 24) }]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -414,7 +485,10 @@ export const EmployeesTab = ({ topInset, navigation }) => {
             {!searchQuery && (
               <TouchableOpacity
                 style={styles.emptyAddBtn}
-                onPress={() => setShowAddModal(true)}
+                onPress={() => {
+                  setEditingEmployee(null);
+                  setShowAddModal(true);
+                }}
               >
                 <MaterialIcons name="add" size={18} color="#FFFFFF" />
                 <Text style={styles.emptyAddBtnText}>Add First Employee</Text>
@@ -465,19 +539,94 @@ export const EmployeesTab = ({ topInset, navigation }) => {
                     )}
                   </View>
 
-                  <View style={{ flex: 1, marginLeft: 12 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <Text style={[styles.empName, { color: isDark ? '#FFFFFF' : '#0F172A' }]}>
-                        {emp.name}
-                      </Text>
-                      <View style={styles.empIdTag}>
-                        <Text style={styles.empIdTagText}>{emp.employeeId || 'EMP'}</Text>
+                  <View style={styles.headerInfoCol}>
+                    <View style={styles.nameAndStatusRow}>
+                      <View style={styles.nameAndIdBox}>
+                        <Text
+                          style={[styles.empName, { color: isDark ? '#FFFFFF' : '#0F172A' }]}
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
+                        >
+                          {emp.name}
+                        </Text>
+                        <View
+                          style={[
+                            styles.empIdTag,
+                            {
+                              backgroundColor: isDark ? 'rgba(0, 56, 130, 0.28)' : 'rgba(0, 56, 130, 0.08)',
+                              borderColor: isDark ? 'rgba(0, 56, 130, 0.45)' : 'rgba(0, 56, 130, 0.18)',
+                            },
+                          ]}
+                        >
+                          <Text style={styles.empIdTagText}>{emp.employeeId || 'EMP'}</Text>
+                        </View>
                       </View>
+
+                      {/* Status Pill - Right aligned, flexShrink: 0, guaranteed zero overlap */}
+                      {!isApproved && emp.approvalStatus && emp.approvalStatus !== 'Approved' && (
+                        <View
+                          style={[
+                            styles.statusPill,
+                            {
+                              backgroundColor: isPending
+                                ? 'rgba(245, 158, 11, 0.14)'
+                                : 'rgba(239, 68, 68, 0.12)',
+                            },
+                          ]}
+                        >
+                          <View
+                            style={[
+                              styles.statusDot,
+                              {
+                                backgroundColor: isPending
+                                  ? AppColors.warningAmber
+                                  : AppColors.dangerRed,
+                              },
+                            ]}
+                          />
+                          <Text
+                            style={[
+                              styles.statusPillText,
+                              {
+                                color: isPending
+                                  ? AppColors.warningAmber
+                                  : AppColors.dangerRed,
+                              },
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {emp.approvalStatus}
+                          </Text>
+                        </View>
+                      )}
                     </View>
 
-                    <Text style={[styles.empRole, { color: isDark ? 'rgba(255,255,255,0.7)' : '#64748B' }]}>
-                      {emp.role}
-                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 2 }}>
+                      <Text
+                        style={[styles.empRole, { color: isDark ? 'rgba(255,255,255,0.7)' : '#64748B' }]}
+                        numberOfLines={1}
+                      >
+                        {emp.role === 'Manager' ? 'Manager (Operational Admin)' : emp.role}
+                      </Text>
+                      {emp.role === 'Manager' && (
+                        <View
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            backgroundColor: isDark ? 'rgba(79, 70, 229, 0.2)' : '#EEF2FF',
+                            paddingHorizontal: 6,
+                            paddingVertical: 1.5,
+                            borderRadius: 6,
+                            borderWidth: 1,
+                            borderColor: isDark ? '#4338CA' : '#C7D2FE',
+                            gap: 3,
+                          }}
+                        >
+                          <MaterialIcons name="workspace-premium" size={11} color="#4F46E5" />
+                          <Text style={{ fontSize: 9.5, fontWeight: '800', color: '#4F46E5' }}>ADMIN</Text>
+                        </View>
+                      )}
+                    </View>
 
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
                       <View
@@ -499,49 +648,13 @@ export const EmployeesTab = ({ topInset, navigation }) => {
                               ? { color: '#0891B2', fontWeight: '700' }
                               : { color: isDark ? '#94A3B8' : '#475569' },
                           ]}
+                          numberOfLines={1}
                         >
                           {emp.type || 'Full Time'} • {emp.accessType || 'Employee'}
                         </Text>
                       </View>
                     </View>
                   </View>
-
-                  {/* Status Pill - Only shown when not approved (e.g. Pending Approval or Rejected) */}
-                  {!isApproved && emp.approvalStatus && emp.approvalStatus !== 'Approved' && (
-                    <View
-                      style={[
-                        styles.statusPill,
-                        {
-                          backgroundColor: isPending
-                            ? 'rgba(245, 158, 11, 0.14)'
-                            : 'rgba(239, 68, 68, 0.12)',
-                        },
-                      ]}
-                    >
-                      <View
-                        style={[
-                          styles.statusDot,
-                          {
-                            backgroundColor: isPending
-                              ? AppColors.warningAmber
-                              : AppColors.dangerRed,
-                          },
-                        ]}
-                      />
-                      <Text
-                        style={[
-                          styles.statusPillText,
-                          {
-                            color: isPending
-                              ? AppColors.warningAmber
-                              : AppColors.dangerRed,
-                          },
-                        ]}
-                      >
-                        {emp.approvalStatus}
-                      </Text>
-                    </View>
-                  )}
                 </View>
 
                 {/* Info row */}
@@ -654,6 +767,70 @@ export const EmployeesTab = ({ topInset, navigation }) => {
           })
         )}
 
+        {/* Pagination Controls */}
+        {totalPages > 1 && (
+          <View
+            style={[
+              styles.paginationRow,
+              {
+                backgroundColor: isDark ? AppColors.darkCard : '#FFFFFF',
+                borderColor: isDark ? AppColors.darkBorder : '#E2E8F0',
+              },
+            ]}
+          >
+            <TouchableOpacity
+              style={[styles.pageBtn, page <= 1 && styles.pageBtnDisabled]}
+              disabled={page <= 1 || isLoading}
+              onPress={() => setPage((prev) => Math.max(1, prev - 1))}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons
+                name="chevron-left"
+                size={20}
+                color={page <= 1 ? (isDark ? '#64748B' : '#94A3B8') : AppColors.primaryColor}
+              />
+              <Text
+                style={[
+                  styles.pageBtnText,
+                  { color: page <= 1 ? (isDark ? '#64748B' : '#94A3B8') : AppColors.primaryColor },
+                ]}
+              >
+                Prev
+              </Text>
+            </TouchableOpacity>
+
+            <View style={styles.pageInfoBox}>
+              <Text style={[styles.pageInfoText, { color: isDark ? '#F1F5F9' : '#0F172A' }]}>
+                Page <Text style={{ fontWeight: '700' }}>{page}</Text> of <Text style={{ fontWeight: '700' }}>{totalPages}</Text>
+              </Text>
+              <Text style={[styles.pageTotalSubtext, { color: isDark ? '#94A3B8' : '#64748B' }]}>
+                {totalCount} total staff
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={[styles.pageBtn, page >= totalPages && styles.pageBtnDisabled]}
+              disabled={page >= totalPages || isLoading}
+              onPress={() => setPage((prev) => Math.min(totalPages, prev + 1))}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[
+                  styles.pageBtnText,
+                  { color: page >= totalPages ? (isDark ? '#64748B' : '#94A3B8') : AppColors.primaryColor },
+                ]}
+              >
+                Next
+              </Text>
+              <MaterialIcons
+                name="chevron-right"
+                size={20}
+                color={page >= totalPages ? (isDark ? '#64748B' : '#94A3B8') : AppColors.primaryColor}
+              />
+            </TouchableOpacity>
+          </View>
+        )}
+
         <View style={{ height: 100 }} />
       </ScrollView>
 
@@ -668,7 +845,10 @@ export const EmployeesTab = ({ topInset, navigation }) => {
           <View
             style={[
               styles.modalSheet,
-              { backgroundColor: isDark ? AppColors.darkCard : '#FFFFFF' },
+              {
+                backgroundColor: isDark ? AppColors.darkCard : '#FFFFFF',
+                paddingBottom: Math.max(insets.bottom, 24) + 16,
+              },
             ]}
           >
             <View style={styles.modalHeader}>
@@ -706,7 +886,7 @@ export const EmployeesTab = ({ topInset, navigation }) => {
                       {selectedEmployee.name}
                     </Text>
                     <Text style={[styles.modalEmpRole, { color: AppColors.primaryColor }]}>
-                      {selectedEmployee.role}
+                      {selectedEmployee.role === 'Manager' ? 'Manager (Operational Admin)' : selectedEmployee.role}
                     </Text>
                     <Text style={[styles.modalEmpAccess, { color: isDark ? '#94A3B8' : '#64748B' }]}>
                       {selectedEmployee.type || 'Full Time'} • Access: {selectedEmployee.accessType || 'Employee'}
@@ -758,9 +938,58 @@ export const EmployeesTab = ({ topInset, navigation }) => {
                       },
                     ]}
                   >
-                    Super Admin Status: {selectedEmployee.approvalStatus || 'Approved'}
+                    Approval Status: {selectedEmployee.approvalStatus || 'Approved'}
                   </Text>
                 </View>
+
+                {selectedEmployee.approvalStatus === 'Pending Approval' && (
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      gap: 10,
+                      marginBottom: 16,
+                      padding: 12,
+                      backgroundColor: isDark ? '#1E1B4B' : '#F5F3FF',
+                      borderRadius: 12,
+                      borderWidth: 1,
+                      borderColor: isDark ? '#4338CA' : '#C7D2FE',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: isDark ? '#FFFFFF' : '#1E1B4B' }}>
+                        Manager Submission
+                      </Text>
+                      <Text style={{ fontSize: 11, color: isDark ? '#C7D2FE' : '#64748B' }}>
+                        Review and approve this staff profile
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      style={{
+                        backgroundColor: AppColors.successGreen,
+                        paddingHorizontal: 14,
+                        paddingVertical: 8,
+                        borderRadius: 8,
+                      }}
+                      onPress={() => handleReviewApproval('approve')}
+                    >
+                      <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 12 }}>Approve</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={{
+                        backgroundColor: 'transparent',
+                        borderWidth: 1,
+                        borderColor: AppColors.dangerRed,
+                        paddingHorizontal: 12,
+                        paddingVertical: 7,
+                        borderRadius: 8,
+                      }}
+                      onPress={() => handleReviewApproval('reject')}
+                    >
+                      <Text style={{ color: AppColors.dangerRed, fontWeight: '700', fontSize: 12 }}>Reject</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
 
                 {/* Details Section */}
                 <View style={styles.sectionBlock}>
@@ -801,19 +1030,51 @@ export const EmployeesTab = ({ topInset, navigation }) => {
                     Shift & Compensation
                   </Text>
                   <View style={styles.detailRow}>
-                    <Text style={[styles.detailKey, { color: isDark ? '#94A3B8' : '#64748B' }]}>Monthly Pay</Text>
-                    <Text style={[styles.detailVal, { color: isDark ? '#FFFFFF' : '#0F172A' }]}>
+                    <Text style={[styles.detailKey, { color: isDark ? '#94A3B8' : '#64748B' }]}>Employment Type</Text>
+                    <Text style={[styles.detailVal, { color: isDark ? '#FFFFFF' : '#0F172A', fontWeight: '700' }]}>
+                      {selectedEmployee.type || 'Full-Time'}
+                    </Text>
+                  </View>
+                  {selectedEmployee.type === 'Temporary' && (selectedEmployee.schedule?.startDate || selectedEmployee.schedule?.endDate) && (
+                    <View style={styles.detailRow}>
+                      <Text style={[styles.detailKey, { color: isDark ? '#94A3B8' : '#64748B' }]}>Engagement Period</Text>
+                      <Text style={[styles.detailVal, { color: '#EA580C', fontWeight: '700' }]}>
+                        {selectedEmployee.schedule.startDate || '—'} to {selectedEmployee.schedule.endDate || '—'}
+                      </Text>
+                    </View>
+                  )}
+                  {Array.isArray(selectedEmployee.schedule?.workingDays) && selectedEmployee.schedule.workingDays.length > 0 && (
+                    <View style={styles.detailRow}>
+                      <Text style={[styles.detailKey, { color: isDark ? '#94A3B8' : '#64748B' }]}>Working Days</Text>
+                      <Text style={[styles.detailVal, { color: isDark ? '#FFFFFF' : '#0F172A' }]}>
+                        {selectedEmployee.schedule.workingDays.join(', ')}
+                      </Text>
+                    </View>
+                  )}
+                  <View style={styles.detailRow}>
+                    <Text style={[styles.detailKey, { color: isDark ? '#94A3B8' : '#64748B' }]}>Compensation</Text>
+                    <Text style={[styles.detailVal, { color: AppColors.secondaryColor, fontWeight: '700' }]}>
                       {selectedEmployee.compensation?.payAmount
-                        ? `₹${Number(selectedEmployee.compensation.payAmount).toLocaleString('en-IN')}`
+                        ? `₹${Number(selectedEmployee.compensation.payAmount).toLocaleString('en-IN')}${selectedEmployee.compensation?.payType ? ` / ${selectedEmployee.compensation.payType}` : ''}${selectedEmployee.compensation?.payFreq ? ` (${selectedEmployee.compensation.payFreq})` : ''}`
                         : 'Not recorded'}
                     </Text>
                   </View>
                   <View style={styles.detailRow}>
                     <Text style={[styles.detailKey, { color: isDark ? '#94A3B8' : '#64748B' }]}>Shift Hours</Text>
                     <Text style={[styles.detailVal, { color: isDark ? '#FFFFFF' : '#0F172A' }]}>
-                      {selectedEmployee.schedule?.shiftTiming || 'General Floor Shift'}
+                      {selectedEmployee.schedule?.workingTimeStart && selectedEmployee.schedule?.workingTimeEnd
+                        ? `${selectedEmployee.schedule.workingTimeStart} - ${selectedEmployee.schedule.workingTimeEnd}`
+                        : selectedEmployee.schedule?.shiftTiming || 'General Floor Shift'}
                     </Text>
                   </View>
+                  {!!selectedEmployee.notes && (
+                    <View style={styles.detailRow}>
+                      <Text style={[styles.detailKey, { color: isDark ? '#94A3B8' : '#64748B' }]}>Notes</Text>
+                      <Text style={[styles.detailVal, { color: isDark ? '#FFFFFF' : '#0F172A', flex: 1, textAlign: 'right' }]}>
+                        {selectedEmployee.notes}
+                      </Text>
+                    </View>
+                  )}
                 </View>
 
                 {/* Emergency Contact */}
@@ -931,23 +1192,46 @@ export const EmployeesTab = ({ topInset, navigation }) => {
                 </View>
 
                 {/* Action Buttons in Modal */}
-                <View style={{ flexDirection: 'row', gap: 12, marginTop: 20, marginBottom: 24 }}>
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 20, marginBottom: 24 }}>
                   <TouchableOpacity
                     style={[styles.modalActionBtn, { backgroundColor: AppColors.primaryColor, flex: 1 }]}
+                    onPress={() => {
+                      const empToEdit = selectedEmployee;
+                      setShowDetailModal(false);
+                      setEditingEmployee(empToEdit);
+                      setShowAddModal(true);
+                    }}
+                  >
+                    <MaterialIcons name="edit" size={17} color="#FFFFFF" />
+                    <Text style={styles.modalActionBtnText}>Edit</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.modalActionBtn,
+                      {
+                        backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#F1F5F9',
+                        borderWidth: 1,
+                        borderColor: isDark ? AppColors.darkBorder : '#E2E8F0',
+                        flex: 1,
+                      },
+                    ]}
                     onPress={() => {
                       setShowDetailModal(false);
                       navigation?.navigate('Attendance');
                     }}
                   >
-                    <MaterialIcons name="how-to-reg" size={18} color="#FFFFFF" />
-                    <Text style={styles.modalActionBtnText}>Attendance</Text>
+                    <MaterialIcons name="how-to-reg" size={17} color={isDark ? '#FFFFFF' : '#0F172A'} />
+                    <Text style={[styles.modalActionBtnText, { color: isDark ? '#FFFFFF' : '#0F172A' }]}>
+                      Attendance
+                    </Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
                     style={[styles.modalActionBtn, { backgroundColor: 'rgba(239, 68, 68, 0.12)', flex: 1 }]}
                     onPress={() => handleDeactivate(selectedEmployee)}
                   >
-                    <MaterialIcons name="delete" size={18} color={AppColors.dangerRed} />
+                    <MaterialIcons name="delete" size={17} color={AppColors.dangerRed} />
                     <Text style={[styles.modalActionBtnText, { color: AppColors.dangerRed }]}>
                       Deactivate
                     </Text>
@@ -959,10 +1243,24 @@ export const EmployeesTab = ({ topInset, navigation }) => {
         </View>
       </Modal>
 
-      {/* 8. Add Employee Modal */}
+      {/* 8. Add / Edit Permanent Employee Modal */}
       <AddEmployeeModal
         visible={showAddModal}
-        onClose={() => setShowAddModal(false)}
+        initialEmployee={editingEmployee}
+        onClose={() => {
+          setShowAddModal(false);
+          setEditingEmployee(null);
+        }}
+        onSuccess={() => {
+          fetchEmployees();
+          setEditingEmployee(null);
+        }}
+      />
+
+      {/* 9. Add Temporary / Part-Time Staff Modal */}
+      <AddTempStaffModal
+        visible={showTempStaffModal}
+        onClose={() => setShowTempStaffModal(false)}
         onSuccess={() => fetchEmployees()}
       />
     </View>
@@ -974,9 +1272,6 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingBottom: 14,
   },
@@ -991,11 +1286,39 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontFamily: Platform.OS === 'ios' ? 'Outfit' : 'Outfit-Medium',
   },
-  addEmployeeBtn: {
+  headerTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  headerActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  addTempStaffBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 9,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1.2,
+    gap: 6,
+  },
+  addTempStaffBtnText: {
+    fontSize: 12.5,
+    fontWeight: '700',
+  },
+  addEmployeeBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: AppColors.primaryColor,
-    paddingHorizontal: 14,
+    paddingHorizontal: 10,
     paddingVertical: 9,
     borderRadius: 12,
     gap: 6,
@@ -1008,7 +1331,7 @@ const styles = StyleSheet.create({
   addEmployeeBtnText: {
     color: '#FFFFFF',
     fontWeight: '700',
-    fontSize: 13,
+    fontSize: 12.5,
   },
   scrollContent: {
     paddingHorizontal: 16,
@@ -1169,16 +1492,41 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     fontSize: 15,
   },
+  headerInfoCol: {
+    flex: 1,
+    marginLeft: 12,
+    minWidth: 0,
+    justifyContent: 'center',
+  },
+  nameAndStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    minWidth: 0,
+  },
+  nameAndIdBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+    minWidth: 0,
+  },
   empName: {
     fontSize: 15,
     fontWeight: '800',
     letterSpacing: -0.2,
+    flexShrink: 1,
   },
   empIdTag: {
-    marginLeft: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+    flexShrink: 0,
   },
   empIdTagText: {
-    fontSize: 11,
+    fontSize: 10.5,
     fontWeight: '700',
     color: AppColors.primaryColor,
   },
@@ -1200,9 +1548,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 10,
+    paddingVertical: 3.5,
+    borderRadius: 8,
     gap: 5,
+    flexShrink: 0,
   },
   statusDot: {
     width: 6,
@@ -1593,5 +1942,43 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  paginationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginTop: 14,
+    marginBottom: 8,
+  },
+  pageBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    backgroundColor: 'rgba(0, 56, 130, 0.08)',
+  },
+  pageBtnDisabled: {
+    backgroundColor: 'transparent',
+    opacity: 0.5,
+  },
+  pageBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  pageInfoBox: {
+    alignItems: 'center',
+  },
+  pageInfoText: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  pageTotalSubtext: {
+    fontSize: 11,
+    marginTop: 2,
   },
 });

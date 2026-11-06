@@ -62,6 +62,7 @@ import {
   ShopOutlined,
   InfoCircleOutlined,
   PaperClipOutlined,
+  LockOutlined,
 } from '@ant-design/icons';
 import confetti from 'canvas-confetti';
 import { useTheme } from '../../theme/ThemeContext';
@@ -83,6 +84,28 @@ const getGymInitials = (name) => {
 };
 
 export const INITIAL_EMPLOYEES = [];
+
+/**
+ * Automatically determine system access type from role (Automatic RBAC)
+ * Manager -> Admin
+ * Trainer / Head Trainer / Front Desk / Support / Physio / Nutritionist -> Employee
+ * Housekeeping / Maintenance / Security -> None
+ */
+export const computeAccessTypeFromRole = (role) => {
+  if (!role) return 'Employee';
+  const norm = String(role).trim().toLowerCase();
+  if (norm.includes('front desk') || norm.includes('reception')) return 'Employee';
+  if (norm.includes('manager')) return 'Admin';
+  if (
+    norm.includes('trainer') ||
+    norm.includes('support') ||
+    norm.includes('physio') ||
+    norm.includes('nutrition')
+  ) {
+    return 'Employee';
+  }
+  return 'None';
+};
 
 export const formatAmountWithCommas = (val) => {
   if (val === undefined || val === null || val === '') return '';
@@ -163,6 +186,22 @@ export const EmployeeManagement = ({
   const [editEmployeeForm] = Form.useForm();
   const [tempStaffForm] = Form.useForm();
   const [attachDocForm] = Form.useForm();
+
+  const addRoleWatch = Form.useWatch('role', addEmployeeForm);
+  const editRoleWatch = Form.useWatch('role', editEmployeeForm);
+  const isTrainerRole = (role) => {
+    if (!role) return false;
+    const norm = String(role).trim().toLowerCase();
+    if (norm.includes('manager')) return false;
+    return (
+      norm.includes('trainer') ||
+      norm.includes('coach') ||
+      norm.includes('instructor') ||
+      norm === 'fitness trainer' ||
+      norm === 'head trainer'
+    );
+  };
+  const isAddTrainer = isTrainerRole(addRoleWatch || 'Trainer');
 
   // Map live gym trainers & staff from database fallback
   const mappedGymStaff = useMemo(() => {
@@ -450,9 +489,12 @@ export const EmployeeManagement = ({
 
   const handleOpenDetails = (record) => {
     setSelectedEmployee(record);
-    setDetailAccessType(record.accessType || 'Employee');
-    setDetailRole(record.role || 'Trainer');
+    const empRole = record.role || 'Trainer';
+    const isTrainer = isTrainerRole(empRole);
+    setDetailAccessType(record.accessType || computeAccessTypeFromRole(empRole));
+    setDetailRole(empRole);
     setDetailEmpType(record.type || 'Full-Time');
+    setShowTrainerShowcaseTab(isTrainer);
     setEditPhoto(record.avatar || null);
     setEditEmpDocs(Array.isArray(record.documents) ? record.documents : []);
     setEditWorkingDays(
@@ -522,6 +564,10 @@ export const EmployeeManagement = ({
       experience: record.experience || (record.experienceYears ? `${record.experienceYears}+ Years` : ''),
       certifications: Array.isArray(record.certifications) ? record.certifications : [],
       languages: Array.isArray(record.languages) ? record.languages : [],
+      requireStaffApproval: record.managerPermissions?.requireStaffApproval ?? true,
+      requirePlanSwitchApproval: record.managerPermissions?.requirePlanSwitchApproval ?? true,
+      requireCancellationApproval: record.managerPermissions?.requireCancellationApproval ?? true,
+      requireProfileEditApproval: record.managerPermissions?.requireProfileEditApproval ?? true,
     });
 
     const empType = (record.type || '').toLowerCase();
@@ -554,7 +600,8 @@ export const EmployeeManagement = ({
       phone: formattedPhone,
       email: values.email ? values.email.trim() : (selectedEmployee.email || ''),
       role: detailRole || values.role || selectedEmployee.role || 'Trainer',
-      accessType: detailAccessType || values.accessType || selectedEmployee.accessType || 'Employee',
+      accessType: computeAccessTypeFromRole(detailRole || values.role || selectedEmployee.role || 'Trainer'),
+      password: values.password && values.password.trim() ? values.password.trim() : undefined,
       gender: values.gender || selectedEmployee.gender || 'All',
       type: values.type || selectedEmployee.type || 'Full-Time',
       status: values.status || selectedEmployee.status || 'Active',
@@ -623,28 +670,42 @@ export const EmployeeManagement = ({
       },
       documents: editEmpDocs && editEmpDocs.length > 0 ? editEmpDocs : (selectedEmployee.documents || []),
       notes: values.notes !== undefined ? values.notes : (selectedEmployee.notes || ''),
+      managerPermissions: {
+        requireStaffApproval: values.requireStaffApproval !== undefined ? values.requireStaffApproval : (selectedEmployee.managerPermissions?.requireStaffApproval ?? true),
+        requirePlanSwitchApproval: values.requirePlanSwitchApproval !== undefined ? values.requirePlanSwitchApproval : (selectedEmployee.managerPermissions?.requirePlanSwitchApproval ?? true),
+        requireCancellationApproval: values.requireCancellationApproval !== undefined ? values.requireCancellationApproval : (selectedEmployee.managerPermissions?.requireCancellationApproval ?? true),
+        requireProfileEditApproval: values.requireProfileEditApproval !== undefined ? values.requireProfileEditApproval : (selectedEmployee.managerPermissions?.requireProfileEditApproval ?? true),
+      },
     };
 
     try {
+      let finalStatus = 'Approved';
       if (targetId && !targetId.startsWith('tr-') && !targetId.startsWith('staff-')) {
-        await apiClient.put(`/employees/${targetId}`, updatePayload);
+        const res = await apiClient.put(`/employees/${targetId}`, updatePayload);
+        if (res.data?.approvalStatus) {
+          finalStatus = res.data.approvalStatus;
+        }
       }
       const updated = employeesList.map((emp) => {
         if (emp.key === selectedEmployee.key || emp.id === targetId || emp._id === targetId) {
           return {
             ...emp,
             ...updatePayload,
-            approvalStatus: 'Pending Approval',
+            approvalStatus: finalStatus,
           };
         }
         return emp;
       });
       setEmployeesList(updated);
       setIsDetailsModalOpen(false);
-      message.success(`All updates submitted for ${updatePayload.name}. Pending Super Admin approval.`);
+      message.success(
+        finalStatus === 'Approved'
+          ? `All updates applied directly for ${updatePayload.name}.`
+          : `All updates submitted for ${updatePayload.name}. Pending Gym Admin approval.`
+      );
       await loadEmployees(currentPage, pageSize);
     } catch {
-      message.success(`Changes saved locally and sent to Super Admin for approval.`);
+      message.success(`Changes saved locally.`);
       setIsDetailsModalOpen(false);
     } finally {
       setIsSavingDetails(false);
@@ -675,9 +736,26 @@ export const EmployeeManagement = ({
     }
   };
 
+  const handleReviewApproval = async (employeeId, action, reason = '') => {
+    try {
+      await apiClient.put(`/employees/${employeeId}/approval`, {
+        action,
+        rejectionReason: reason,
+      });
+      message.success(action === 'approve' ? 'Employee approved successfully!' : 'Employee approval rejected.');
+      await loadEmployees(currentPage, pageSize);
+    } catch (err) {
+      message.error(err.response?.data?.message || `Failed to ${action} employee.`);
+    }
+  };
+
   const handleNextToAddStep2 = async () => {
     try {
-      await addEmployeeForm.validateFields(['name', 'phone', 'email', 'role', 'accessLevel']);
+      const fieldsToValidate = ['name', 'phone', 'email', 'role'];
+      if (addRoleWatch === 'Manager') {
+        fieldsToValidate.push('password');
+      }
+      await addEmployeeForm.validateFields(fieldsToValidate);
       setAddStep(2);
     } catch {
       message.warning('Please complete all required fields on Page 1 before proceeding.');
@@ -716,14 +794,20 @@ export const EmployeeManagement = ({
       role: allFormValues.role || 'Trainer',
       phone: `${allFormValues.countryCode || '+91'} ${allFormValues.phone || ''}`.trim(),
       email: allFormValues.email?.trim() || `${allFormValues.name?.toLowerCase().replace(/\s+/g, '') || 'staff'}@gymezy.com`,
+      password: allFormValues.password ? allFormValues.password.trim() : undefined,
       avatar:
         addPhoto ||
         'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=150&auto=format&fit=crop',
       joinDate: todayFormatted,
       status: 'Active',
       attendance: 'Present',
-      accessType: allFormValues.accessLevel || 'Admin',
-      approvalStatus: 'Pending Approval',
+      accessType: computeAccessTypeFromRole(allFormValues.role),
+      managerPermissions: {
+        requireStaffApproval: allFormValues.requireStaffApproval ?? true,
+        requirePlanSwitchApproval: allFormValues.requirePlanSwitchApproval ?? true,
+        requireCancellationApproval: allFormValues.requireCancellationApproval ?? true,
+        requireProfileEditApproval: allFormValues.requireProfileEditApproval ?? true,
+      },
       previousEmployments: addPrevEmployments
         .filter((pe) => pe.companyName?.trim() || pe.designation?.trim())
         .map((pe) => ({
@@ -755,7 +839,11 @@ export const EmployeeManagement = ({
       const updated = [savedEmp, ...employeesList.filter((e) => (e.id || e._id) !== (savedEmp.id || savedEmp._id))];
       setEmployeesList(updated);
       setAddedEmployeeData(savedEmp);
-      message.success(`Employee "${savedEmp.name}" submitted for Super Admin approval!`);
+      if (savedEmp.approvalStatus === 'Approved') {
+        message.success(`Employee "${savedEmp.name}" added successfully!`);
+      } else {
+        message.success(`Employee "${savedEmp.name}" submitted for Gym Admin approval!`);
+      }
 
       setIsAddModalOpen(false);
       setAddStep(1);
@@ -787,10 +875,10 @@ export const EmployeeManagement = ({
 
     const dayWiseArray = isDifferentDays
       ? workingDays.map((d) => ({
-          day: d,
-          startTime: dayWiseHours[d]?.startTime ? dayWiseHours[d].startTime.format('hh:mm A') : '09:00 AM',
-          endTime: dayWiseHours[d]?.endTime ? dayWiseHours[d].endTime.format('hh:mm A') : '06:00 PM',
-        }))
+        day: d,
+        startTime: dayWiseHours[d]?.startTime ? dayWiseHours[d].startTime.format('hh:mm A') : '09:00 AM',
+        endTime: dayWiseHours[d]?.endTime ? dayWiseHours[d].endTime.format('hh:mm A') : '06:00 PM',
+      }))
       : [];
 
     const newStaffPayload = {
@@ -871,6 +959,8 @@ export const EmployeeManagement = ({
 
   const getRoleTagColor = (role) => {
     switch (role) {
+      case 'Manager':
+        return { bg: isDarkMode ? 'rgba(79, 70, 229, 0.2)' : '#eef2ff', color: isDarkMode ? '#a5b4fc' : '#4338ca' };
       case 'Front Desk Manager':
         return { bg: isDarkMode ? 'rgba(114, 46, 209, 0.2)' : '#f3effe', color: isDarkMode ? '#b37feb' : '#722ed1' };
       case 'Trainer':
@@ -1199,66 +1289,102 @@ export const EmployeeManagement = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 130,
-      render: (_, record) => (
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <Button
-            type="text"
-            size="small"
-            onClick={() => handleOpenDetails(record)}
-            icon={<EyeOutlined style={{ color: '#722ed1', fontSize: 15 }} />}
-            style={{
-              backgroundColor: isDarkMode ? 'rgba(114, 46, 209, 0.15)' : '#f3effe',
-              borderRadius: 'var(--radius-base)',
-              width: 32,
-              height: 32,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          />
-          <Button
-            type="text"
-            size="small"
-            onClick={() => handleOpenDetails(record)}
-            icon={<EditOutlined style={{ color: '#722ed1', fontSize: 15 }} />}
-            style={{
-              backgroundColor: isDarkMode ? 'rgba(114, 46, 209, 0.15)' : '#f3effe',
-              borderRadius: 'var(--radius-base)',
-              width: 32,
-              height: 32,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          />
-          <Dropdown
-            menu={{
-              items: [
-                { key: 'view', label: 'View Profile', icon: <EyeOutlined />, onClick: () => handleOpenDetails(record) },
-                { key: 'edit', label: 'Edit Permissions', icon: <EditOutlined />, onClick: () => handleOpenDetails(record) },
-                {
-                  key: 'deactivate',
-                  label: 'Deactivate',
-                  icon: <DeleteOutlined style={{ color: '#ef4444' }} />,
-                  onClick: () => {
-                    setEmployeesList(employeesList.map((e) => (e.key === record.key ? { ...e, status: 'Inactive', attendance: '—' } : e)));
-                    message.warning(`Employee ${record.name} deactivated.`);
+      width: 170,
+      render: (_, record) => {
+        const isPendingApproval = record.approvalStatus === 'Pending Approval';
+        return (
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            {isPendingApproval ? (
+              <>
+                <Button
+                  type="primary"
+                  size="small"
+                  style={{
+                    backgroundColor: '#10b981',
+                    borderColor: '#10b981',
+                    borderRadius: 'var(--radius-base)',
+                    fontSize: 11,
+                    fontWeight: 600,
+                  }}
+                  onClick={() => handleReviewApproval(record.id || record._id, 'approve')}
+                >
+                  Approve
+                </Button>
+                <Button
+                  danger
+                  size="small"
+                  style={{
+                    borderRadius: 'var(--radius-base)',
+                    fontSize: 11,
+                    fontWeight: 600,
+                  }}
+                  onClick={() => handleReviewApproval(record.id || record._id, 'reject', 'Rejected by Gym Admin')}
+                >
+                  Reject
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  type="text"
+                  size="small"
+                  onClick={() => handleOpenDetails(record)}
+                  icon={<EyeOutlined style={{ color: '#722ed1', fontSize: 15 }} />}
+                  style={{
+                    backgroundColor: isDarkMode ? 'rgba(114, 46, 209, 0.15)' : '#f3effe',
+                    borderRadius: 'var(--radius-base)',
+                    width: 32,
+                    height: 32,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                />
+                <Button
+                  type="text"
+                  size="small"
+                  onClick={() => handleOpenDetails(record)}
+                  icon={<EditOutlined style={{ color: '#722ed1', fontSize: 15 }} />}
+                  style={{
+                    backgroundColor: isDarkMode ? 'rgba(114, 46, 209, 0.15)' : '#f3effe',
+                    borderRadius: 'var(--radius-base)',
+                    width: 32,
+                    height: 32,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                />
+              </>
+            )}
+            <Dropdown
+              menu={{
+                items: [
+                  { key: 'view', label: 'View Profile', icon: <EyeOutlined />, onClick: () => handleOpenDetails(record) },
+                  { key: 'edit', label: 'Edit Permissions', icon: <EditOutlined />, onClick: () => handleOpenDetails(record) },
+                  {
+                    key: 'deactivate',
+                    label: 'Deactivate',
+                    icon: <DeleteOutlined style={{ color: '#ef4444' }} />,
+                    onClick: () => {
+                      setEmployeesList(employeesList.map((e) => (e.key === record.key ? { ...e, status: 'Inactive', attendance: '—' } : e)));
+                      message.warning(`Employee ${record.name} deactivated.`);
+                    },
                   },
-                },
-              ],
-            }}
-            trigger={['click']}
-          >
-            <Button
-              type="text"
-              size="small"
-              icon={<MoreOutlined style={{ fontSize: 16, color: isDarkMode ? '#888888' : '#64748b' }} />}
-              style={{ width: 28, height: 32 }}
-            />
-          </Dropdown>
-        </div>
-      ),
+                ],
+              }}
+              trigger={['click']}
+            >
+              <Button
+                type="text"
+                size="small"
+                icon={<MoreOutlined style={{ fontSize: 16, color: isDarkMode ? '#888888' : '#64748b' }} />}
+                style={{ width: 28, height: 32 }}
+              />
+            </Dropdown>
+          </div>
+        );
+      },
     },
   ];
 
@@ -1552,7 +1678,7 @@ export const EmployeeManagement = ({
               style={{ width: '100%', height: 42 }}
             >
               <Option value="ALL">All Roles</Option>
-              <Option value="Front Desk Manager">Front Desk Manager</Option>
+              <Option value="Manager">Manager</Option>
               <Option value="Trainer">Trainer</Option>
               <Option value="Customer Support">Customer Support</Option>
               <Option value="Housekeeping">Housekeeping</Option>
@@ -1977,7 +2103,11 @@ export const EmployeeManagement = ({
                                 setDetailEmpType(val);
                                 const vLower = (val || '').toLowerCase();
                                 const isTemp = vLower === 'temporary' || vLower === 'part-time' || vLower === 'parttime';
-                                setShowTrainerShowcaseTab(!isTemp);
+                                if (isTrainerRole(detailRole)) {
+                                  setShowTrainerShowcaseTab(!isTemp);
+                                } else {
+                                  setShowTrainerShowcaseTab(false);
+                                }
                               }}
                             >
                               <Option value="Full-Time">Full-Time</Option>
@@ -1988,45 +2118,58 @@ export const EmployeeManagement = ({
                         </Col>
                       </Row>
 
-                      {((detailEmpType || '').toLowerCase() === 'temporary' ||
-                        (detailEmpType || '').toLowerCase() === 'part-time' ||
-                        (detailEmpType || '').toLowerCase() === 'parttime') && (
-                        <div
-                          style={{
-                            marginTop: 4,
-                            marginBottom: 16,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            padding: '10px 14px',
-                            borderRadius: 'var(--radius-base)',
-                            backgroundColor: isDarkMode ? '#1e1e1e' : '#f8fafc',
-                            border: `1px dashed ${isDarkMode ? '#333333' : '#cbd5e1'}`,
-                          }}
-                        >
-                          <div>
-                            <div style={{ fontWeight: 600, fontSize: 12.5, color: isDarkMode ? '#e2e8f0' : '#1e293b' }}>
-                              <CrownOutlined style={{ color: '#722ed1', marginRight: 6 }} />
-                              Showcase Trainer Profile in User App
+                      {isTrainerRole(detailRole) &&
+                        ((detailEmpType || '').toLowerCase() === 'temporary' ||
+                          (detailEmpType || '').toLowerCase() === 'part-time' ||
+                          (detailEmpType || '').toLowerCase() === 'parttime') && (
+                          <div
+                            style={{
+                              marginTop: 4,
+                              marginBottom: 16,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '10px 14px',
+                              borderRadius: 'var(--radius-base)',
+                              backgroundColor: isDarkMode ? '#1e1e1e' : '#f8fafc',
+                              border: `1px dashed ${isDarkMode ? '#333333' : '#cbd5e1'}`,
+                            }}
+                          >
+                            <div>
+                              <div style={{ fontWeight: 600, fontSize: 12.5, color: isDarkMode ? '#e2e8f0' : '#1e293b' }}>
+                                <CrownOutlined style={{ color: '#722ed1', marginRight: 6 }} />
+                                Showcase Trainer Profile in User App
+                              </div>
+                              <div style={{ fontSize: 11.5, color: isDarkMode ? '#94a3b8' : '#64748b' }}>
+                                By default, temporary/part-time staff profiles are hidden from the user app. Toggle on to customize their showcase card.
+                              </div>
                             </div>
-                            <div style={{ fontSize: 11.5, color: isDarkMode ? '#94a3b8' : '#64748b' }}>
-                              By default, temporary/part-time staff profiles are hidden from the user app. Toggle on to customize their showcase card.
-                            </div>
+                            <Switch
+                              checked={showTrainerShowcaseTab}
+                              onChange={(checked) => setShowTrainerShowcaseTab(checked)}
+                            />
                           </div>
-                          <Switch
-                            checked={showTrainerShowcaseTab}
-                            onChange={(checked) => setShowTrainerShowcaseTab(checked)}
-                          />
-                        </div>
-                      )}
+                        )}
 
                       <Row gutter={16}>
                         <Col xs={24} sm={12}>
                           <Form.Item label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Role / Designation <span style={{ color: '#ef4444' }}>*</span></span>} style={{ marginBottom: 14 }}>
-                            <Select value={detailRole} onChange={setDetailRole} style={{ height: 40 }}>
+                            <Select
+                              value={detailRole}
+                              onChange={(newRole) => {
+                                setDetailRole(newRole);
+                                setDetailAccessType(computeAccessTypeFromRole(newRole));
+                                const isNowTrainer = isTrainerRole(newRole);
+                                setShowTrainerShowcaseTab(isNowTrainer);
+                                if (!isNowTrainer && (editActiveTab === 'trainer_profile' || editActiveTab === 'trainer_pricing')) {
+                                  setEditActiveTab('personal');
+                                }
+                              }}
+                              style={{ height: 40 }}
+                            >
+                              <Option value="Manager">Manager</Option>
                               <Option value="Trainer">Trainer</Option>
                               <Option value="Head Trainer">Head Trainer</Option>
-                              <Option value="Front Desk Manager">Front Desk Manager</Option>
                               <Option value="Customer Support">Customer Support</Option>
                               <Option value="Housekeeping">Housekeeping</Option>
                               <Option value="Nutritionist">Nutritionist</Option>
@@ -2048,50 +2191,147 @@ export const EmployeeManagement = ({
                         </Col>
                       </Row>
 
-                      {/* Change Access Type (3 Cards Grid) */}
+                      {detailRole === 'Manager' && (
+                        <Card
+                          size="small"
+                          style={{
+                            marginBottom: 16,
+                            borderRadius: 'var(--radius-base)',
+                            backgroundColor: isDarkMode ? '#1e1b4b' : '#f5f3ff',
+                            borderColor: isDarkMode ? '#4338ca' : '#c7d2fe',
+                          }}
+                        >
+                          <div style={{ fontWeight: 700, fontSize: 13, color: '#4f46e5', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <CrownOutlined /> Manager Delegation Permissions (Admin Approval Required)
+                          </div>
+                          <div style={{ fontSize: 11.5, color: isDarkMode ? '#c7d2fe' : '#475569', marginBottom: 12 }}>
+                            Check the operations that require your (Gym Admin) approval before taking effect. Uncheck to allow direct manager execution.
+                          </div>
+                          <Row gutter={[12, 10]}>
+                            <Col xs={24} sm={12}>
+                              <Form.Item name="requireStaffApproval" valuePropName="checked" style={{ marginBottom: 8 }}>
+                                <Checkbox style={{ fontSize: 12 }}>Staff & Trainers (Add/Edit/Remove)</Checkbox>
+                              </Form.Item>
+                            </Col>
+                            <Col xs={24} sm={12}>
+                              <Form.Item name="requirePlanSwitchApproval" valuePropName="checked" style={{ marginBottom: 8 }}>
+                                <Checkbox style={{ fontSize: 12 }}>Plan Switches & Prorations</Checkbox>
+                              </Form.Item>
+                            </Col>
+                            <Col xs={24} sm={12}>
+                              <Form.Item name="requireCancellationApproval" valuePropName="checked" style={{ marginBottom: 8 }}>
+                                <Checkbox style={{ fontSize: 12 }}>Cancellations & Refund Claims</Checkbox>
+                              </Form.Item>
+                            </Col>
+                            <Col xs={24} sm={12}>
+                              <Form.Item name="requireProfileEditApproval" valuePropName="checked" style={{ marginBottom: 8 }}>
+                                <Checkbox style={{ fontSize: 12 }}>Gym Profile & Operating Timings</Checkbox>
+                              </Form.Item>
+                            </Col>
+                          </Row>
+                        </Card>
+                      )}
+
+                      {detailRole === 'Manager' && (
+                        <Card
+                          size="small"
+                          style={{
+                            marginBottom: 16,
+                            borderRadius: 'var(--radius-base)',
+                            backgroundColor: isDarkMode ? '#1e1b4b' : '#f5f3ff',
+                            borderColor: isDarkMode ? '#4338ca' : '#c7d2fe',
+                          }}
+                        >
+                          <div style={{ fontWeight: 700, fontSize: 13, color: '#4f46e5', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <LockOutlined /> Manager Portal Login Password
+                          </div>
+                          <div style={{ fontSize: 11.5, color: isDarkMode ? '#c7d2fe' : '#475569', marginBottom: 12 }}>
+                            Set or reset the login password for this Manager. Leave blank to keep existing password.
+                          </div>
+                          <Form.Item
+                            name="password"
+                            label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>New Portal Password (Optional)</span>}
+                            rules={[{ min: 6, message: 'Password must be at least 6 characters' }]}
+                            style={{ marginBottom: 4 }}
+                          >
+                            <Input.Password
+                              placeholder="Leave blank to keep existing password (min 6 characters)"
+                              style={{ height: 40, borderRadius: 'var(--radius-base)', backgroundColor: isDarkMode ? '#1e1e1e' : '#ffffff' }}
+                            />
+                          </Form.Item>
+                        </Card>
+                      )}
+
+                      {/* Automatic System Access (RBAC) */}
                       <div style={{ marginBottom: 12 }}>
                         <div style={{ fontSize: 12.5, fontWeight: 600, color: isDarkMode ? '#cccccc' : '#334155', marginBottom: 8 }}>
-                          System Access Level
+                          System Access Level (Automatic RBAC)
                         </div>
-                        <Row gutter={12}>
-                          {[
-                            { key: 'Admin', label: 'Admin', desc: 'Full access to all features and settings', icon: <CrownOutlined /> },
-                            { key: 'Employee', label: 'Employee', desc: 'Limited access to assigned features', icon: <TeamOutlined /> },
-                            { key: 'None', label: 'None', desc: 'No access to system', icon: <CloseCircleOutlined /> },
-                          ].map((acc) => {
-                            const isSelected = detailAccessType === acc.key;
-                            return (
-                              <Col xs={24} sm={8} key={acc.key}>
-                                <div
-                                  onClick={() => setDetailAccessType(acc.key)}
-                                  style={{
-                                    height: 88,
-                                    padding: '10px 12px',
-                                    borderRadius: 'var(--radius-base)',
-                                    border: `1.5px solid ${isSelected ? '#722ed1' : isDarkMode ? '#262626' : '#e2e8f0'}`,
-                                    backgroundColor: isSelected ? (isDarkMode ? 'rgba(114, 46, 209, 0.15)' : '#f3effe') : isDarkMode ? '#141414' : '#ffffff',
-                                    cursor: 'pointer',
-                                    position: 'relative',
-                                    transition: 'all 0.2s ease',
-                                  }}
-                                >
-                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                                    <span style={{ fontSize: 15, color: isSelected ? '#722ed1' : isDarkMode ? '#888888' : '#64748b' }}>
-                                      {acc.icon}
-                                    </span>
-                                    {isSelected && <CheckCircleFilled style={{ color: '#722ed1', fontSize: 13 }} />}
-                                  </div>
-                                  <div style={{ fontSize: 13, fontWeight: 700, color: isSelected ? '#722ed1' : isDarkMode ? '#ffffff' : '#0f172a' }}>
-                                    {acc.label}
-                                  </div>
-                                  <div style={{ fontSize: 10.5, color: isDarkMode ? '#888888' : '#64748b', marginTop: 2, lineHeight: 1.2 }}>
-                                    {acc.desc}
-                                  </div>
-                                </div>
-                              </Col>
-                            );
-                          })}
-                        </Row>
+                        <div
+                          style={{
+                            padding: '12px 16px',
+                            borderRadius: 'var(--radius-base)',
+                            border: `1px solid ${isDarkMode ? '#262626' : '#e2e8f0'}`,
+                            backgroundColor: isDarkMode ? '#141414' : '#f8fafc',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            flexWrap: 'wrap',
+                            gap: 12,
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                            <div
+                              style={{
+                                width: 38,
+                                height: 38,
+                                borderRadius: 8,
+                                backgroundColor:
+                                  detailAccessType === 'Admin'
+                                    ? 'rgba(114, 46, 209, 0.12)'
+                                    : detailAccessType === 'Employee'
+                                      ? 'rgba(22, 119, 255, 0.12)'
+                                      : isDarkMode ? '#262626' : '#f1f5f9',
+                                color:
+                                  detailAccessType === 'Admin'
+                                    ? '#722ed1'
+                                    : detailAccessType === 'Employee'
+                                      ? '#1677ff'
+                                      : isDarkMode ? '#888888' : '#64748b',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: 18,
+                              }}
+                            >
+                              {detailAccessType === 'Admin' ? (
+                                <CrownOutlined />
+                              ) : detailAccessType === 'Employee' ? (
+                                <TeamOutlined />
+                              ) : (
+                                <CloseCircleOutlined />
+                              )}
+                            </div>
+                            <div>
+                              <div style={{ fontWeight: 700, fontSize: 14, color: isDarkMode ? '#ffffff' : '#0f172a' }}>
+                                {detailAccessType} Access
+                              </div>
+                              <div style={{ fontSize: 11.5, color: isDarkMode ? '#888888' : '#64748b' }}>
+                                {detailAccessType === 'Admin'
+                                  ? 'Delegated Manager administrative access (governed by permissions above)'
+                                  : detailAccessType === 'Employee'
+                                    ? 'Can check in members, scan QR codes, and view scheduled sessions'
+                                    : 'Staff roster profile only (no app console credentials needed)'}
+                              </div>
+                            </div>
+                          </div>
+                          <Tag
+                            color={detailAccessType === 'Admin' ? 'purple' : detailAccessType === 'Employee' ? 'blue' : 'default'}
+                            style={{ borderRadius: 6, fontWeight: 600, fontSize: 11.5, padding: '2px 10px' }}
+                          >
+                            Automated by Role
+                          </Tag>
+                        </div>
                       </div>
                     </div>
                   ),
@@ -2107,8 +2347,29 @@ export const EmployeeManagement = ({
                     <div style={{ paddingTop: 8 }}>
                       <Row gutter={16}>
                         <Col xs={24} sm={14}>
-                          <Form.Item label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Specialization / Key Skills</span>} name="specialty" style={{ marginBottom: 14 }}>
-                            <Input placeholder="e.g. Strength Training, HIIT, Yoga, Nutrition" style={{ height: 40, borderRadius: 'var(--radius-base)' }} />
+                          <Form.Item
+                            label={
+                              <span style={{ fontWeight: 600, fontSize: 12.5 }}>
+                                {detailRole === 'Manager'
+                                  ? 'Administrative & Operations Skills'
+                                  : isTrainerRole(detailRole)
+                                    ? 'Fitness Specialization / Training Focus'
+                                    : 'Specialization / Key Skills'}
+                              </span>
+                            }
+                            name="specialty"
+                            style={{ marginBottom: 14 }}
+                          >
+                            <Input
+                              placeholder={
+                                detailRole === 'Manager'
+                                  ? 'e.g. Gym Operations, Staff Management, Customer Retention'
+                                  : isTrainerRole(detailRole)
+                                    ? 'e.g. Strength Training, HIIT, Yoga, Nutrition'
+                                    : 'e.g. Facility Maintenance, Front Desk Greeting'
+                              }
+                              style={{ height: 40, borderRadius: 'var(--radius-base)' }}
+                            />
                           </Form.Item>
                         </Col>
                         <Col xs={24} sm={10}>
@@ -2252,84 +2513,98 @@ export const EmployeeManagement = ({
                     </div>
                   ),
                 },
-                ...(showTrainerShowcaseTab
+                ...(isTrainerRole(detailRole) && showTrainerShowcaseTab
                   ? [
-                      {
-                        key: 'trainer_profile',
-                        label: (
-                          <span style={{ fontWeight: 600, fontSize: 13 }}>
-                            <CrownOutlined /> Trainer Profile & Showcase
-                          </span>
-                        ),
-                        children: (
-                          <div style={{ paddingTop: 8 }}>
-                            <Form.Item
-                              label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>About Me / Trainer Description</span>}
-                              name="description"
-                              style={{ marginBottom: 14 }}
-                            >
-                              <TextArea
-                                rows={3}
-                                placeholder="e.g. Certified fitness trainer helping clients achieve their fitness goals through personalized training."
-                                style={{ borderRadius: 'var(--radius-base)' }}
-                              />
-                            </Form.Item>
+                    {
+                      key: 'trainer_profile',
+                      label: (
+                        <span style={{ fontWeight: 600, fontSize: 13 }}>
+                          <CrownOutlined /> Trainer Profile & Showcase
+                        </span>
+                      ),
+                      children: (
+                        <div style={{ paddingTop: 8 }}>
+                          <Form.Item
+                            label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>About Me / Trainer Description</span>}
+                            name="description"
+                            style={{ marginBottom: 14 }}
+                          >
+                            <TextArea
+                              rows={3}
+                              placeholder="e.g. Certified fitness trainer helping clients achieve their fitness goals through personalized training."
+                              style={{ borderRadius: 'var(--radius-base)' }}
+                            />
+                          </Form.Item>
 
-                            <Row gutter={16}>
-                              <Col xs={24} sm={12}>
-                                <Form.Item
-                                  label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Services Offered</span>}
-                                  name="servicesOffered"
-                                  style={{ marginBottom: 14 }}
-                                >
-                                  <Select mode="multiple" placeholder="Select services" style={{ width: '100%' }}>
-                                    <Option value="Weight Loss Program">Weight Loss Program</Option>
-                                    <Option value="Muscle Gain">Muscle Gain</Option>
-                                    <Option value="Strength Training">Strength Training</Option>
-                                    <Option value="Fat Loss">Fat Loss</Option>
-                                    <Option value="HIIT Workouts">HIIT Workouts</Option>
-                                    <Option value="Diet & Nutrition">Diet & Nutrition</Option>
-                                    <Option value="Body Transformation">Body Transformation</Option>
-                                  </Select>
-                                </Form.Item>
-                              </Col>
-                              <Col xs={24} sm={6}>
-                                <Form.Item
-                                  label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Experience</span>}
-                                  name="experience"
-                                  style={{ marginBottom: 14 }}
-                                >
-                                  <Input placeholder="e.g. 3+ Years" style={{ height: 40, borderRadius: 'var(--radius-base)' }} />
-                                </Form.Item>
-                              </Col>
-                              <Col xs={24} sm={6}>
-                                <Form.Item
-                                  label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Languages</span>}
-                                  name="languages"
-                                  style={{ marginBottom: 14 }}
-                                >
-                                  <Select mode="tags" placeholder="Languages" style={{ width: '100%' }}>
-                                    <Option value="English">English</Option>
-                                    <Option value="Hindi">Hindi</Option>
-                                    <Option value="Tamil">Tamil</Option>
-                                    <Option value="Telugu">Telugu</Option>
-                                    <Option value="Kannada">Kannada</Option>
-                                  </Select>
-                                </Form.Item>
-                              </Col>
-                            </Row>
+                          <Row gutter={16}>
+                            <Col xs={24} sm={12}>
+                              <Form.Item
+                                label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Services Offered</span>}
+                                name="servicesOffered"
+                                style={{ marginBottom: 14 }}
+                              >
+                                <Select mode="multiple" placeholder="Select services" style={{ width: '100%' }}>
+                                  <Option value="Weight Loss Program">Weight Loss Program</Option>
+                                  <Option value="Muscle Gain">Muscle Gain</Option>
+                                  <Option value="Strength Training">Strength Training</Option>
+                                  <Option value="Fat Loss">Fat Loss</Option>
+                                  <Option value="HIIT Workouts">HIIT Workouts</Option>
+                                  <Option value="Diet & Nutrition">Diet & Nutrition</Option>
+                                  <Option value="Body Transformation">Body Transformation</Option>
+                                </Select>
+                              </Form.Item>
+                            </Col>
+                            <Col xs={24} sm={6}>
+                              <Form.Item
+                                label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Experience</span>}
+                                name="experience"
+                                style={{ marginBottom: 14 }}
+                              >
+                                <Input placeholder="e.g. 3+ Years" style={{ height: 40, borderRadius: 'var(--radius-base)' }} />
+                              </Form.Item>
+                            </Col>
+                            <Col xs={24} sm={6}>
+                              <Form.Item
+                                label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Languages</span>}
+                                name="languages"
+                                style={{ marginBottom: 14 }}
+                              >
+                                <Select mode="tags" placeholder="Languages" style={{ width: '100%' }}>
+                                  <Option value="English">English</Option>
+                                  <Option value="Hindi">Hindi</Option>
+                                  <Option value="Tamil">Tamil</Option>
+                                  <Option value="Telugu">Telugu</Option>
+                                  <Option value="Kannada">Kannada</Option>
+                                </Select>
+                              </Form.Item>
+                            </Col>
+                          </Row>
 
-                            <Form.Item
-                              label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Certifications</span>}
-                              name="certifications"
-                              style={{ marginBottom: 14 }}
+                          <Form.Item
+                            label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Certifications</span>}
+                            name="certifications"
+                            style={{ marginBottom: 14 }}
+                          >
+                            <Select
+                              mode="tags"
+                              placeholder="Type certification (e.g. ACE, ISSA, CPR) or select below"
+                              notFoundContent={null}
+                              style={{ width: '100%' }}
                             >
-                              <Select mode="tags" placeholder="Add certifications" style={{ width: '100%' }} />
-                            </Form.Item>
-                          </div>
-                        ),
-                      },
-                    ]
+                              <Option value="ACE Certified Personal Trainer">ACE Certified Personal Trainer</Option>
+                              <Option value="ISSA Certified Fitness Trainer">ISSA Certified Fitness Trainer</Option>
+                              <Option value="ACSM Certified Personal Trainer">ACSM Certified Personal Trainer</Option>
+                              <Option value="NASM Certified Personal Trainer">NASM Certified Personal Trainer</Option>
+                              <Option value="CSCS (Strength & Conditioning)">CSCS (Strength & Conditioning)</Option>
+                              <Option value="CPR / AED Certified">CPR / AED Certified</Option>
+                              <Option value="Yoga Alliance RYT 200">Yoga Alliance RYT 200</Option>
+                              <Option value="CrossFit Level 1 Coach">CrossFit Level 1 Coach</Option>
+                            </Select>
+                          </Form.Item>
+                        </div>
+                      ),
+                    },
+                  ]
                   : []),
                 {
                   key: 'schedule_pay',
@@ -2396,7 +2671,7 @@ export const EmployeeManagement = ({
                           <Form.Item label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Compensation Model</span>} name="payType" initialValue="Monthly" style={{ marginBottom: 14 }}>
                             <Select style={{ height: 40 }}>
                               <Option value="Monthly">Monthly Fixed Salary</Option>
-                              <Option value="Session">Per Session / Personal Training</Option>
+                              {isTrainerRole(detailRole) && <Option value="Session">Per Session / Personal Training</Option>}
                               <Option value="Hourly">Hourly Rate</Option>
                               <Option value="Daily">Daily Pay</Option>
                             </Select>
@@ -2562,119 +2837,119 @@ export const EmployeeManagement = ({
                     </div>
                   ),
                 },
-                ...((detailRole === 'Trainer' || selectedEmployee?.role === 'Trainer')
+                ...(isTrainerRole(detailRole)
                   ? [
-                      {
-                        key: 'trainer_pricing',
-                        label: (
-                          <span style={{ fontWeight: 600, fontSize: 13, color: '#722ed1' }}>
-                            <DollarOutlined /> Membership Tier Rates
-                          </span>
-                        ),
-                        children: (
-                          <div style={{ paddingTop: 8 }}>
-                            <Alert
-                              type="info"
-                              showIcon
-                              message="Member Personal Training Pricing per Membership Tier"
-                              description="Specify what members are charged when they add this trainer to their Standard Membership package. These rates reflect directly in the user mobile app booking screen."
-                              style={{ marginBottom: 16, borderRadius: 'var(--radius-base)' }}
-                            />
-                            <Row gutter={16}>
-                              <Col xs={24} sm={12}>
-                                <Form.Item
-                                  label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Monthly Plan Add-on (₹)</span>}
-                                  name="trainerMonthly"
-                                  initialValue={0}
-                                  style={{ marginBottom: 14 }}
-                                >
-                                  <InputNumber
-                                    prefix="₹"
-                                    placeholder="e.g. 1,500"
-                                    min={0}
-                                    formatter={formatAmountWithCommas}
-                                    parser={parseAmountWithoutCommas}
-                                    style={{ width: '100%', height: 40, borderRadius: 'var(--radius-base)' }}
-                                  />
-                                </Form.Item>
-                              </Col>
-                              <Col xs={24} sm={12}>
-                                <Form.Item
-                                  label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Quarterly Plan Add-on (₹)</span>}
-                                  name="trainerQuarterly"
-                                  initialValue={0}
-                                  style={{ marginBottom: 14 }}
-                                >
-                                  <InputNumber
-                                    prefix="₹"
-                                    placeholder="e.g. 4,000"
-                                    min={0}
-                                    formatter={formatAmountWithCommas}
-                                    parser={parseAmountWithoutCommas}
-                                    style={{ width: '100%', height: 40, borderRadius: 'var(--radius-base)' }}
-                                  />
-                                </Form.Item>
-                              </Col>
-                            </Row>
-                            <Row gutter={16}>
-                              <Col xs={24} sm={12}>
-                                <Form.Item
-                                  label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Half Yearly Plan Add-on (₹)</span>}
-                                  name="trainerHalfYearly"
-                                  initialValue={0}
-                                  style={{ marginBottom: 14 }}
-                                >
-                                  <InputNumber
-                                    prefix="₹"
-                                    placeholder="e.g. 7,500"
-                                    min={0}
-                                    formatter={formatAmountWithCommas}
-                                    parser={parseAmountWithoutCommas}
-                                    style={{ width: '100%', height: 40, borderRadius: 'var(--radius-base)' }}
-                                  />
-                                </Form.Item>
-                              </Col>
-                              <Col xs={24} sm={12}>
-                                <Form.Item
-                                  label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Annual Plan Add-on (₹)</span>}
-                                  name="trainerAnnual"
-                                  initialValue={0}
-                                  style={{ marginBottom: 14 }}
-                                >
-                                  <InputNumber
-                                    prefix="₹"
-                                    placeholder="e.g. 14,000"
-                                    min={0}
-                                    formatter={formatAmountWithCommas}
-                                    parser={parseAmountWithoutCommas}
-                                    style={{ width: '100%', height: 40, borderRadius: 'var(--radius-base)' }}
-                                  />
-                                </Form.Item>
-                              </Col>
-                            </Row>
-                            <Row gutter={16}>
-                              <Col xs={24} sm={12}>
-                                <Form.Item
-                                  label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Single Session Rate (₹)</span>}
-                                  name="trainerSingleSession"
-                                  initialValue={0}
-                                  style={{ marginBottom: 14 }}
-                                >
-                                  <InputNumber
-                                    prefix="₹"
-                                    placeholder="e.g. 200"
-                                    min={0}
-                                    formatter={formatAmountWithCommas}
-                                    parser={parseAmountWithoutCommas}
-                                    style={{ width: '100%', height: 40, borderRadius: 'var(--radius-base)' }}
-                                  />
-                                </Form.Item>
-                              </Col>
-                            </Row>
-                          </div>
-                        ),
-                      },
-                    ]
+                    {
+                      key: 'trainer_pricing',
+                      label: (
+                        <span style={{ fontWeight: 600, fontSize: 13, color: '#722ed1' }}>
+                          <DollarOutlined /> Membership Tier Rates
+                        </span>
+                      ),
+                      children: (
+                        <div style={{ paddingTop: 8 }}>
+                          <Alert
+                            type="info"
+                            showIcon
+                            message="Member Personal Training Pricing per Membership Tier"
+                            description="Specify what members are charged when they add this trainer to their Standard Membership package. These rates reflect directly in the user mobile app booking screen."
+                            style={{ marginBottom: 16, borderRadius: 'var(--radius-base)' }}
+                          />
+                          <Row gutter={16}>
+                            <Col xs={24} sm={12}>
+                              <Form.Item
+                                label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Monthly Plan Add-on (₹)</span>}
+                                name="trainerMonthly"
+                                initialValue={0}
+                                style={{ marginBottom: 14 }}
+                              >
+                                <InputNumber
+                                  prefix="₹"
+                                  placeholder="e.g. 1,500"
+                                  min={0}
+                                  formatter={formatAmountWithCommas}
+                                  parser={parseAmountWithoutCommas}
+                                  style={{ width: '100%', height: 40, borderRadius: 'var(--radius-base)' }}
+                                />
+                              </Form.Item>
+                            </Col>
+                            <Col xs={24} sm={12}>
+                              <Form.Item
+                                label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Quarterly Plan Add-on (₹)</span>}
+                                name="trainerQuarterly"
+                                initialValue={0}
+                                style={{ marginBottom: 14 }}
+                              >
+                                <InputNumber
+                                  prefix="₹"
+                                  placeholder="e.g. 4,000"
+                                  min={0}
+                                  formatter={formatAmountWithCommas}
+                                  parser={parseAmountWithoutCommas}
+                                  style={{ width: '100%', height: 40, borderRadius: 'var(--radius-base)' }}
+                                />
+                              </Form.Item>
+                            </Col>
+                          </Row>
+                          <Row gutter={16}>
+                            <Col xs={24} sm={12}>
+                              <Form.Item
+                                label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Half Yearly Plan Add-on (₹)</span>}
+                                name="trainerHalfYearly"
+                                initialValue={0}
+                                style={{ marginBottom: 14 }}
+                              >
+                                <InputNumber
+                                  prefix="₹"
+                                  placeholder="e.g. 7,500"
+                                  min={0}
+                                  formatter={formatAmountWithCommas}
+                                  parser={parseAmountWithoutCommas}
+                                  style={{ width: '100%', height: 40, borderRadius: 'var(--radius-base)' }}
+                                />
+                              </Form.Item>
+                            </Col>
+                            <Col xs={24} sm={12}>
+                              <Form.Item
+                                label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Annual Plan Add-on (₹)</span>}
+                                name="trainerAnnual"
+                                initialValue={0}
+                                style={{ marginBottom: 14 }}
+                              >
+                                <InputNumber
+                                  prefix="₹"
+                                  placeholder="e.g. 14,000"
+                                  min={0}
+                                  formatter={formatAmountWithCommas}
+                                  parser={parseAmountWithoutCommas}
+                                  style={{ width: '100%', height: 40, borderRadius: 'var(--radius-base)' }}
+                                />
+                              </Form.Item>
+                            </Col>
+                          </Row>
+                          <Row gutter={16}>
+                            <Col xs={24} sm={12}>
+                              <Form.Item
+                                label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Single Session Rate (₹)</span>}
+                                name="trainerSingleSession"
+                                initialValue={0}
+                                style={{ marginBottom: 14 }}
+                              >
+                                <InputNumber
+                                  prefix="₹"
+                                  placeholder="e.g. 200"
+                                  min={0}
+                                  formatter={formatAmountWithCommas}
+                                  parser={parseAmountWithoutCommas}
+                                  style={{ width: '100%', height: 40, borderRadius: 'var(--radius-base)' }}
+                                />
+                              </Form.Item>
+                            </Col>
+                          </Row>
+                        </div>
+                      ),
+                    },
+                  ]
                   : []),
               ]}
             />
@@ -2860,11 +3135,11 @@ export const EmployeeManagement = ({
             </Row>
 
             <Row gutter={16}>
-              <Col xs={24} sm={12}>
+              <Col xs={24} sm={24}>
                 <Form.Item label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Role <span style={{ color: '#ef4444' }}>*</span></span>} name="role" initialValue="Trainer" rules={[{ required: true }]} style={{ marginBottom: 14 }}>
                   <Select style={{ height: 40 }}>
+                    <Option value="Manager">Manager (Operational Admin)</Option>
                     <Option value="Trainer">Trainer</Option>
-                    <Option value="Front Desk Manager">Front Desk Manager</Option>
                     <Option value="Customer Support">Customer Support</Option>
                     <Option value="Housekeeping">Housekeeping</Option>
                     <Option value="Nutritionist">Nutritionist</Option>
@@ -2873,95 +3148,173 @@ export const EmployeeManagement = ({
                   </Select>
                 </Form.Item>
               </Col>
-              <Col xs={24} sm={12}>
-                <Form.Item label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Access Level <span style={{ color: '#ef4444' }}>*</span></span>} name="accessLevel" initialValue="Admin" rules={[{ required: true }]} style={{ marginBottom: 4 }}>
-                  <Select style={{ height: 40 }}>
-                    <Option value="Admin">Admin</Option>
-                    <Option value="Employee">Employee</Option>
-                    <Option value="None">None</Option>
-                  </Select>
-                </Form.Item>
-                <div style={{ fontSize: 11, color: isDarkMode ? '#888888' : '#64748b', marginBottom: 14 }}>
-                  Define what this employee can access in the system.
-                </div>
-              </Col>
             </Row>
 
-            {/* Trainer Profile & Showcase (Shown in User App) */}
-            <div style={{ borderTop: `1px solid ${isDarkMode ? '#222222' : '#f1f5f9'}`, paddingTop: 14, marginTop: 6, marginBottom: 14 }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: '#722ed1', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
-                <CrownOutlined /> Trainer Profile & Showcase (Shown in User App)
+            {addRoleWatch === 'Manager' && (
+              <Card
+                size="small"
+                style={{
+                  marginBottom: 16,
+                  borderRadius: 'var(--radius-base)',
+                  backgroundColor: isDarkMode ? '#1e1b4b' : '#f5f3ff',
+                  borderColor: isDarkMode ? '#4338ca' : '#c7d2fe',
+                }}
+              >
+                <div style={{ fontWeight: 700, fontSize: 13, color: '#4f46e5', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <CrownOutlined /> Manager Delegation Permissions (Admin Approval Required)
+                </div>
+                <div style={{ fontSize: 11.5, color: isDarkMode ? '#c7d2fe' : '#475569', marginBottom: 12 }}>
+                  Check the operations that require your (Gym Admin) approval before taking effect. Uncheck to allow direct manager execution.
+                </div>
+                <Row gutter={[12, 10]}>
+                  <Col xs={24} sm={12}>
+                    <Form.Item name="requireStaffApproval" valuePropName="checked" initialValue={true} style={{ marginBottom: 8 }}>
+                      <Checkbox style={{ fontSize: 12 }}>Staff & Trainers (Add/Edit/Remove)</Checkbox>
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} sm={12}>
+                    <Form.Item name="requirePlanSwitchApproval" valuePropName="checked" initialValue={true} style={{ marginBottom: 8 }}>
+                      <Checkbox style={{ fontSize: 12 }}>Plan Switches & Prorations</Checkbox>
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} sm={12}>
+                    <Form.Item name="requireCancellationApproval" valuePropName="checked" initialValue={true} style={{ marginBottom: 8 }}>
+                      <Checkbox style={{ fontSize: 12 }}>Cancellations & Refund Claims</Checkbox>
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} sm={12}>
+                    <Form.Item name="requireProfileEditApproval" valuePropName="checked" initialValue={true} style={{ marginBottom: 8 }}>
+                      <Checkbox style={{ fontSize: 12 }}>Gym Profile & Operating Timings</Checkbox>
+                    </Form.Item>
+                  </Col>
+                </Row>
+              </Card>
+            )}
+
+            {addRoleWatch === 'Manager' && (
+              <Card
+                size="small"
+                style={{
+                  marginBottom: 16,
+                  borderRadius: 'var(--radius-base)',
+                  backgroundColor: isDarkMode ? '#1e1b4b' : '#f5f3ff',
+                  borderColor: isDarkMode ? '#4338ca' : '#c7d2fe',
+                }}
+              >
+                <div style={{ fontWeight: 700, fontSize: 13, color: '#4f46e5', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <LockOutlined /> Manager Portal Login Password
+                </div>
+                <div style={{ fontSize: 11.5, color: isDarkMode ? '#c7d2fe' : '#475569', marginBottom: 12 }}>
+                  Set a secure password for this Manager. They will use their email and this password to log in to the Gym Owner Web Portal & Mobile App.
+                </div>
+                <Form.Item
+                  label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Portal Login Password <span style={{ color: '#ef4444' }}>*</span></span>}
+                  name="password"
+                  rules={[
+                    { required: addRoleWatch === 'Manager', message: 'Please set a portal login password for the manager' },
+                    { min: 6, message: 'Password must be at least 6 characters long' },
+                  ]}
+                  style={{ marginBottom: 4 }}
+                >
+                  <Input.Password
+                    placeholder="Enter password (min 6 characters)"
+                    style={{ height: 40, borderRadius: 'var(--radius-base)', backgroundColor: isDarkMode ? '#1e1e1e' : '#ffffff' }}
+                  />
+                </Form.Item>
+              </Card>
+            )}
+
+            {/* Trainer Profile & Showcase (Only shown for Trainers) */}
+            {isAddTrainer && (
+              <div style={{ borderTop: `1px solid ${isDarkMode ? '#222222' : '#f1f5f9'}`, paddingTop: 14, marginTop: 6, marginBottom: 14 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: '#722ed1', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
+                  <CrownOutlined /> Trainer Profile & Showcase (Shown in User App)
+                </div>
+
+                <Form.Item
+                  label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>About Me / Trainer Description</span>}
+                  name="description"
+                  style={{ marginBottom: 12 }}
+                >
+                  <TextArea
+                    rows={3}
+                    placeholder="e.g. Certified fitness trainer helping clients achieve their fitness goals through personalized training."
+                    style={{ borderRadius: 'var(--radius-base)', backgroundColor: isDarkMode ? '#1e1e1e' : '#ffffff' }}
+                  />
+                </Form.Item>
+
+                <Row gutter={12}>
+                  <Col xs={24} sm={12}>
+                    <Form.Item
+                      label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Services Offered</span>}
+                      name="servicesOffered"
+                      style={{ marginBottom: 12 }}
+                    >
+                      <Select mode="multiple" placeholder="Select services offered" style={{ width: '100%' }}>
+                        <Option value="Weight Loss Program">Weight Loss Program</Option>
+                        <Option value="Muscle Gain">Muscle Gain</Option>
+                        <Option value="Strength Training">Strength Training</Option>
+                        <Option value="Fat Loss">Fat Loss</Option>
+                        <Option value="HIIT Workouts">HIIT Workouts</Option>
+                        <Option value="Diet & Nutrition">Diet & Nutrition</Option>
+                        <Option value="Body Transformation">Body Transformation</Option>
+                      </Select>
+                    </Form.Item>
+                  </Col>
+
+                  <Col xs={24} sm={6}>
+                    <Form.Item
+                      label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Experience</span>}
+                      name="experience"
+                      style={{ marginBottom: 12 }}
+                    >
+                      <Input
+                        placeholder="e.g. 3+ Years"
+                        style={{ height: 40, borderRadius: 'var(--radius-base)', backgroundColor: isDarkMode ? '#1e1e1e' : '#ffffff' }}
+                      />
+                    </Form.Item>
+                  </Col>
+
+                  <Col xs={24} sm={6}>
+                    <Form.Item
+                      label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Languages</span>}
+                      name="languages"
+                      style={{ marginBottom: 12 }}
+                    >
+                      <Select mode="tags" placeholder="Languages spoken" style={{ width: '100%' }}>
+                        <Option value="English">English</Option>
+                        <Option value="Hindi">Hindi</Option>
+                        <Option value="Tamil">Tamil</Option>
+                        <Option value="Telugu">Telugu</Option>
+                        <Option value="Kannada">Kannada</Option>
+                      </Select>
+                    </Form.Item>
+                  </Col>
+                </Row>
+
+                <Form.Item
+                  label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Certifications</span>}
+                  name="certifications"
+                  style={{ marginBottom: 12 }}
+                >
+                  <Select
+                    mode="tags"
+                    placeholder="Type certification (e.g. ACE, ISSA, CPR) or select below"
+                    notFoundContent={null}
+                    style={{ width: '100%' }}
+                  >
+                    <Option value="ACE Certified Personal Trainer">ACE Certified Personal Trainer</Option>
+                    <Option value="ISSA Certified Fitness Trainer">ISSA Certified Fitness Trainer</Option>
+                    <Option value="ACSM Certified Personal Trainer">ACSM Certified Personal Trainer</Option>
+                    <Option value="NASM Certified Personal Trainer">NASM Certified Personal Trainer</Option>
+                    <Option value="CSCS (Strength & Conditioning)">CSCS (Strength & Conditioning)</Option>
+                    <Option value="CPR / AED Certified">CPR / AED Certified</Option>
+                    <Option value="Yoga Alliance RYT 200">Yoga Alliance RYT 200</Option>
+                    <Option value="CrossFit Level 1 Coach">CrossFit Level 1 Coach</Option>
+                  </Select>
+                </Form.Item>
               </div>
-
-              <Form.Item
-                label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>About Me / Trainer Description</span>}
-                name="description"
-                style={{ marginBottom: 12 }}
-              >
-                <TextArea
-                  rows={3}
-                  placeholder="e.g. Certified fitness trainer helping clients achieve their fitness goals through personalized training."
-                  style={{ borderRadius: 'var(--radius-base)', backgroundColor: isDarkMode ? '#1e1e1e' : '#ffffff' }}
-                />
-              </Form.Item>
-
-              <Row gutter={12}>
-                <Col xs={24} sm={12}>
-                  <Form.Item
-                    label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Services Offered</span>}
-                    name="servicesOffered"
-                    style={{ marginBottom: 12 }}
-                  >
-                    <Select mode="multiple" placeholder="Select services offered" style={{ width: '100%' }}>
-                      <Option value="Weight Loss Program">Weight Loss Program</Option>
-                      <Option value="Muscle Gain">Muscle Gain</Option>
-                      <Option value="Strength Training">Strength Training</Option>
-                      <Option value="Fat Loss">Fat Loss</Option>
-                      <Option value="HIIT Workouts">HIIT Workouts</Option>
-                      <Option value="Diet & Nutrition">Diet & Nutrition</Option>
-                      <Option value="Body Transformation">Body Transformation</Option>
-                    </Select>
-                  </Form.Item>
-                </Col>
-
-                <Col xs={24} sm={6}>
-                  <Form.Item
-                    label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Experience</span>}
-                    name="experience"
-                    style={{ marginBottom: 12 }}
-                  >
-                    <Input
-                      placeholder="e.g. 3+ Years"
-                      style={{ height: 40, borderRadius: 'var(--radius-base)', backgroundColor: isDarkMode ? '#1e1e1e' : '#ffffff' }}
-                    />
-                  </Form.Item>
-                </Col>
-
-                <Col xs={24} sm={6}>
-                  <Form.Item
-                    label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Languages</span>}
-                    name="languages"
-                    style={{ marginBottom: 12 }}
-                  >
-                    <Select mode="tags" placeholder="Languages spoken" style={{ width: '100%' }}>
-                      <Option value="English">English</Option>
-                      <Option value="Hindi">Hindi</Option>
-                      <Option value="Tamil">Tamil</Option>
-                      <Option value="Telugu">Telugu</Option>
-                      <Option value="Kannada">Kannada</Option>
-                    </Select>
-                  </Form.Item>
-                </Col>
-              </Row>
-
-              <Form.Item
-                label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Certifications</span>}
-                name="certifications"
-                style={{ marginBottom: 12 }}
-              >
-                <Select mode="tags" placeholder="Type certification and press enter" style={{ width: '100%' }} />
-              </Form.Item>
-            </div>
+            )}
 
             {/* Previous Employment Details */}
             <div style={{ borderTop: `1px solid ${isDarkMode ? '#222222' : '#f1f5f9'}`, paddingTop: 14, marginTop: 6, marginBottom: 14 }}>
@@ -3313,104 +3666,106 @@ export const EmployeeManagement = ({
               </div>
             </div>
 
-            {/* Trainer Certificate (If Employee is a Trainer) */}
-            <div style={{ borderTop: `1px solid ${isDarkMode ? '#222222' : '#f1f5f9'}`, paddingTop: 14, marginTop: 14 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: '#722ed1', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <CrownOutlined /> Trainer Certificate ({trainerCerts.length})
+            {/* Trainer Certificate (Only shown if Employee is a Trainer) */}
+            {isAddTrainer && (
+              <div style={{ borderTop: `1px solid ${isDarkMode ? '#222222' : '#f1f5f9'}`, paddingTop: 14, marginTop: 14 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#722ed1', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <CrownOutlined /> Trainer Certificate ({trainerCerts.length})
+                  </div>
+                  <Button
+                    size="small"
+                    type="primary"
+                    ghost
+                    icon={<PaperClipOutlined />}
+                    onClick={() => openAttachDocModal('trainer')}
+                    style={{
+                      borderRadius: 'var(--radius-base)',
+                      fontWeight: 600,
+                      fontSize: 12,
+                      borderColor: '#722ed1',
+                      color: '#722ed1',
+                    }}
+                  >
+                    Attach Certificate
+                  </Button>
                 </div>
-                <Button
-                  size="small"
-                  type="primary"
-                  ghost
-                  icon={<PaperClipOutlined />}
-                  onClick={() => openAttachDocModal('trainer')}
-                  style={{
-                    borderRadius: 'var(--radius-base)',
-                    fontWeight: 600,
-                    fontSize: 12,
-                    borderColor: '#722ed1',
-                    color: '#722ed1',
-                  }}
-                >
-                  Attach Certificate
-                </Button>
-              </div>
 
-              <div style={{ width: '100%', overflowX: 'hidden', borderRadius: 8, border: `1px solid ${isDarkMode ? '#333333' : '#f0f0f0'}` }}>
-                <Table
-                  size="small"
-                  pagination={false}
-                  tableLayout="fixed"
-                  dataSource={trainerCerts}
-                  columns={[
-                    {
-                      title: 'Certificate Type',
-                      dataIndex: 'certType',
-                      key: 'certType',
-                      width: 150,
-                      ellipsis: true,
-                      render: (t) => <span style={{ fontWeight: 600 }}>{t}</span>,
-                    },
-                    {
-                      title: 'Document Number',
-                      dataIndex: 'certNum',
-                      key: 'certNum',
-                      width: 140,
-                      ellipsis: true,
-                      render: (n) => <span style={{ fontFamily: 'monospace' }}>{n || '—'}</span>,
-                    },
-                    {
-                      title: 'File Name',
-                      dataIndex: 'fileName',
-                      key: 'fileName',
-                      ellipsis: true,
-                      render: (f) => (
-                        <span
-                          title={f}
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 6,
-                            color: '#1677ff',
-                            cursor: 'pointer',
-                            maxWidth: 170,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}
-                          onClick={() => message.info(`Viewing ${f}`)}
-                        >
-                          <FilePdfOutlined style={{ color: '#ef4444', flexShrink: 0 }} />
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f}</span>
-                        </span>
-                      ),
-                    },
-                    {
-                      title: 'Added On',
-                      dataIndex: 'addedOn',
-                      key: 'addedOn',
-                      width: 105,
-                    },
-                    {
-                      title: 'Action',
-                      key: 'action',
-                      width: 60,
-                      align: 'center',
-                      render: (_, rec) => (
-                        <Button
-                          type="text"
-                          size="small"
-                          danger
-                          icon={<DeleteOutlined />}
-                          onClick={() => setTrainerCerts(trainerCerts.filter((c) => c.key !== rec.key))}
-                        />
-                      ),
-                    },
-                  ]}
-                />
+                <div style={{ width: '100%', overflowX: 'hidden', borderRadius: 8, border: `1px solid ${isDarkMode ? '#333333' : '#f0f0f0'}` }}>
+                  <Table
+                    size="small"
+                    pagination={false}
+                    tableLayout="fixed"
+                    dataSource={trainerCerts}
+                    columns={[
+                      {
+                        title: 'Certificate Type',
+                        dataIndex: 'certType',
+                        key: 'certType',
+                        width: 150,
+                        ellipsis: true,
+                        render: (t) => <span style={{ fontWeight: 600 }}>{t}</span>,
+                      },
+                      {
+                        title: 'Document Number',
+                        dataIndex: 'certNum',
+                        key: 'certNum',
+                        width: 140,
+                        ellipsis: true,
+                        render: (n) => <span style={{ fontFamily: 'monospace' }}>{n || '—'}</span>,
+                      },
+                      {
+                        title: 'File Name',
+                        dataIndex: 'fileName',
+                        key: 'fileName',
+                        ellipsis: true,
+                        render: (f) => (
+                          <span
+                            title={f}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              color: '#1677ff',
+                              cursor: 'pointer',
+                              maxWidth: 170,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                            onClick={() => message.info(`Viewing ${f}`)}
+                          >
+                            <FilePdfOutlined style={{ color: '#ef4444', flexShrink: 0 }} />
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f}</span>
+                          </span>
+                        ),
+                      },
+                      {
+                        title: 'Added On',
+                        dataIndex: 'addedOn',
+                        key: 'addedOn',
+                        width: 105,
+                      },
+                      {
+                        title: 'Action',
+                        key: 'action',
+                        width: 60,
+                        align: 'center',
+                        render: (_, rec) => (
+                          <Button
+                            type="text"
+                            size="small"
+                            danger
+                            icon={<DeleteOutlined />}
+                            onClick={() => setTrainerCerts(trainerCerts.filter((c) => c.key !== rec.key))}
+                          />
+                        ),
+                      },
+                    ]}
+                  />
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Bottom Actions */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, alignItems: 'center', marginTop: 24, borderTop: `1px solid ${isDarkMode ? '#222222' : '#f1f5f9'}`, paddingTop: 16 }}>
@@ -3448,8 +3803,8 @@ export const EmployeeManagement = ({
               {targetDocSection === 'personal'
                 ? 'Attach Personal Document'
                 : targetDocSection === 'employment'
-                ? 'Attach Employment Document'
-                : 'Attach Trainer Certificate'}
+                  ? 'Attach Employment Document'
+                  : 'Attach Trainer Certificate'}
             </span>
           </div>
         }
