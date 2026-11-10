@@ -11,6 +11,7 @@ import { ApiResponse } from '../utils/apiResponse.js';
 import {
   getSearchTerm,
   escapeRegex,
+  parsePagination,
   tokenizeAndNormalize,
   scoreGymRelevance,
   getDidYouMeanSuggestion,
@@ -333,10 +334,38 @@ export const onboardGym = asyncHandler(async (req, res) => {
     throw ApiError.badRequest('Gym address is required.');
   }
 
-  // 2. Check for duplicate gym email or owner account
-  const existingUser = await User.findOne({ email: finalEmail });
-  if (existingUser) {
+  // 2. Check for duplicate gym email or owner account (Email & Phone verification across User & Gym)
+  let cleanPhoneDigits = (finalPhone || '').replace(/\D/g, '');
+  if (cleanPhoneDigits.length === 12 && cleanPhoneDigits.startsWith('91')) {
+    cleanPhoneDigits = cleanPhoneDigits.slice(2);
+  } else if (cleanPhoneDigits.length === 11 && cleanPhoneDigits.startsWith('0')) {
+    cleanPhoneDigits = cleanPhoneDigits.slice(1);
+  }
+
+  const phoneQuery = {
+    $or: [
+      { phone: finalPhone },
+      { phone: cleanPhoneDigits },
+      { phone: `+91${cleanPhoneDigits}` },
+      { phone: `91${cleanPhoneDigits}` },
+      { phone: new RegExp(`${cleanPhoneDigits}$`) },
+    ],
+  };
+
+  const [existingUserByEmail, existingGymByEmail, existingUserByPhone, existingGymByPhone] =
+    await Promise.all([
+      User.findOne({ email: finalEmail }),
+      Gym.findOne({ email: finalEmail }),
+      cleanPhoneDigits.length >= 10 ? User.findOne(phoneQuery) : null,
+      cleanPhoneDigits.length >= 10 ? Gym.findOne(phoneQuery) : null,
+    ]);
+
+  if (existingUserByEmail || existingGymByEmail) {
     throw ApiError.conflict('An account with this email address already exists.');
+  }
+
+  if (existingUserByPhone || existingGymByPhone) {
+    throw ApiError.conflict('An account with this mobile number already exists.');
   }
 
   // 3. Compress Media (Images & PDFs) with high quality & {gymname}_{filename} formatting
@@ -1165,9 +1194,10 @@ export const getAdminGymsFleet = asyncHandler(async (req, res) => {
     }
   }
 
+  const isFetchAll = req.query.export === 'true' || limit === 'all' || limit === '0' || Number.parseInt(limit, 10) === 0;
   const pageNum = Math.max(1, Number.parseInt(page, 10) || 1);
-  const limitNum = Math.min(200, Math.max(1, Number.parseInt(limit, 10) || 10));
-  const skip = (pageNum - 1) * limitNum;
+  const limitNum = isFetchAll ? 0 : Math.min(200, Math.max(1, Number.parseInt(limit, 10) || 10));
+  const skip = limitNum > 0 ? (pageNum - 1) * limitNum : 0;
 
   // Global tab counts for sidebar and badges (evaluated in parallel)
   const countsPromise = Promise.all([
@@ -1199,7 +1229,9 @@ export const getAdminGymsFleet = asyncHandler(async (req, res) => {
 
   const transformGym = (g) => {
     const media = resolveGymMediaUrls(g);
-    const gymId = g.partnerId || g._id.toString();
+    const hasValidPartnerId = Boolean(g.partnerId && !/^[0-9a-fA-F]{24}$/.test(g.partnerId) && g.partnerId !== '-');
+    const cleanPartnerId = hasValidPartnerId ? g.partnerId : '';
+    const gymId = cleanPartnerId || g._id.toString();
     const displayLocation = g.area ? `${g.area}, ${g.city}` : (g.city || 'Chennai');
     const fullLocation = g.fullAddress || g.address || displayLocation;
 
@@ -1208,7 +1240,7 @@ export const getAdminGymsFleet = asyncHandler(async (req, res) => {
       id: gymId,
       _id: g._id.toString(),
       mongoId: g._id.toString(),
-      partnerId: g.partnerId || gymId,
+      partnerId: cleanPartnerId,
       location: displayLocation,
       fullAddress: fullLocation,
       address: g.address || fullLocation,
@@ -1245,7 +1277,7 @@ export const getAdminGymsFleet = asyncHandler(async (req, res) => {
     });
 
     totalCount = scored.length;
-    paginatedGyms = scored.slice(skip, skip + limitNum);
+    paginatedGyms = isFetchAll ? scored : scored.slice(skip, skip + limitNum);
   } else {
     // Direct DB pagination & sorting
     const [count, rawGyms] = await Promise.all([
@@ -2260,11 +2292,8 @@ export const getGymTrainers = asyncHandler(async (req, res) => {
  * Separate, lightweight lookup API for gym dropdowns with search and pagination support
  */
 export const getGymOptions = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 20, search = '', status } = req.query;
-
-  const pageNum = Math.max(1, Number.parseInt(page, 10) || 1);
-  const limitNum = Math.min(100, Math.max(1, Number.parseInt(limit, 10) || 20));
-  const skip = (pageNum - 1) * limitNum;
+  const { page, limit, skip, isFetchAll } = parsePagination(req.query, 50, 500);
+  const { status } = req.query;
 
   const query = {};
 
@@ -2276,32 +2305,49 @@ export const getGymOptions = asyncHandler(async (req, res) => {
   if (optionSearch) {
     const s = escapeRegex(optionSearch);
     const searchRegex = new RegExp(s, 'i');
-    query.$or = [
+
+    const orConditions = [
       { name: searchRegex },
       { partnerId: searchRegex },
       { city: searchRegex },
       { area: searchRegex },
+      { slug: searchRegex },
     ];
+
+    // Relaxed spacing regex for concatenated or spaced searches (e.g. "supermax" matches "Super Max Gym", "fitzone" matches "FitZone")
+    const cleanAlnum = optionSearch.replace(/[^a-zA-Z0-9]/g, '');
+    if (cleanAlnum.length >= 2 && cleanAlnum.length <= 30) {
+      const relaxedPattern = cleanAlnum.split('').map(escapeRegex).join('[\\s\\-_]*');
+      const relaxedRegex = new RegExp(relaxedPattern, 'i');
+      orConditions.push({ name: relaxedRegex });
+      orConditions.push({ slug: relaxedRegex });
+    }
+
+    query.$or = orConditions;
+  }
+
+  const findQuery = Gym.find(query)
+    .select('_id partnerId name city area address status approvalStatus slug logo')
+    .sort({ name: 1 })
+    .lean();
+
+  if (!isFetchAll && limit > 0) {
+    findQuery.skip(skip).limit(limit);
   }
 
   const [total, gyms] = await Promise.all([
     Gym.countDocuments(query),
-    Gym.find(query)
-      .select('_id partnerId name city area address status approvalStatus')
-      .sort({ name: 1 })
-      .skip(skip)
-      .limit(limitNum)
-      .lean(),
+    findQuery,
   ]);
 
-  const hasMore = skip + gyms.length < total;
+  const hasMore = isFetchAll ? false : skip + gyms.length < total;
 
   return res.status(200).json(
     ApiResponse.success(
       {
         gyms,
-        page: pageNum,
-        limit: limitNum,
+        page: isFetchAll ? 1 : page,
+        limit: isFetchAll ? gyms.length : limit,
         total,
         hasMore,
       },

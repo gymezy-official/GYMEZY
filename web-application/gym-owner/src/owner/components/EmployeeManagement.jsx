@@ -53,6 +53,7 @@ import {
   SaveOutlined,
   ArrowRightOutlined,
   ArrowLeftOutlined,
+  StarFilled,
   CheckOutlined,
   FilePdfOutlined,
   FileImageOutlined,
@@ -67,6 +68,8 @@ import {
 import confetti from 'canvas-confetti';
 import { useTheme } from '../../theme/ThemeContext';
 import { apiClient } from '../../services/apiClient';
+import { useDebounce } from '../../hooks/useDebounce';
+import { getDidYouMeanSuggestion } from '../../utils/fuzzySearchEngine';
 
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
@@ -84,6 +87,14 @@ const getGymInitials = (name) => {
 };
 
 export const INITIAL_EMPLOYEES = [];
+
+export const hasValidProfilePic = (avatar) => {
+  if (!avatar || typeof avatar !== 'string') return false;
+  const trimmed = avatar.trim();
+  if (!trimmed || trimmed === 'null' || trimmed === 'undefined') return false;
+  if (trimmed.includes('dicebear.com')) return false;
+  return true;
+};
 
 /**
  * Automatically determine system access type from role (Automatic RBAC)
@@ -173,6 +184,13 @@ export const EmployeeManagement = ({
   const gymPartnerId = gym.partnerId || user?.partnerId || (typeof gymId === 'string' && !gymId.match(/^[0-9a-fA-F]{24}$/) ? gymId : '');
   const gymName = gym.name || 'Main Facility';
 
+  const isManager = Boolean(
+    user?.isManager ||
+    user?.role === 'Manager' ||
+    user?.role === 'MANAGER' ||
+    String(user?.role || '').toLowerCase() === 'manager'
+  );
+
   const todayFormatted = useMemo(() => {
     return new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
   }, []);
@@ -203,73 +221,20 @@ export const EmployeeManagement = ({
   };
   const isAddTrainer = isTrainerRole(addRoleWatch || 'Trainer');
 
-  // Map live gym trainers & staff from database fallback
-  const mappedGymStaff = useMemo(() => {
-    const list = [];
-    if (Array.isArray(gym.trainers) && gym.trainers.length > 0) {
-      gym.trainers.forEach((t, index) => {
-        list.push({
-          key: t.id || t._id || `tr-${index}`,
-          id: t.id || t._id || `tr-${index}`,
-          employeeId: `TR00${index + 1}`,
-          name: t.name || 'Trainer',
-          role: 'Trainer',
-          phone: t.phone || gym.phone || '—',
-          specialty: t.specialty || 'Fitness Coach',
-          email: t.email || gym.email || '—',
-          attendance: 'Present',
-          status: 'Active',
-          approvalStatus: 'Approved',
-          type: 'Full-Time',
-          experience: `${t.experienceYears || 2} Years`,
-          avatar: t.image?.fileData || (typeof t.image === 'string' ? t.image : ''),
-          gender: 'All',
-          joinDate: todayFormatted,
-          branch: gymName,
-          gymId,
-          gymPartnerId,
-        });
-      });
-    }
-    if (Array.isArray(gym.staff) && gym.staff.length > 0) {
-      gym.staff.forEach((s, index) => {
-        list.push({
-          key: s.id || s._id || `staff-${index}`,
-          id: s.id || s._id || `staff-${index}`,
-          employeeId: `EMP00${index + 1}`,
-          name: s.name || 'Staff Member',
-          role: s.designation || 'Staff',
-          phone: s.phone || gym.phone || '—',
-          email: s.email || gym.email || '—',
-          attendance: 'Present',
-          status: 'Active',
-          approvalStatus: 'Approved',
-          type: s.type || 'Full-Time',
-          avatar: s.image?.fileData || (typeof s.image === 'string' ? s.image : ''),
-          gender: 'All',
-          joinDate: todayFormatted,
-          branch: gymName,
-          gymId,
-          gymPartnerId,
-        });
-      });
-    }
-    return list;
-  }, [gym.trainers, gym.staff, gym.phone, gym.email, gymName, gymId, gymPartnerId, todayFormatted]);
-
   // Data, Pagination & Filters
-  const [employeesList, setEmployeesList] = useState(mappedGymStaff);
-  const [isLoadingEmployees, setIsLoadingEmployees] = useState(false);
+  const [employeesList, setEmployeesList] = useState([]);
+  const [isLoadingEmployees, setIsLoadingEmployees] = useState(true);
   const [isSavingDetails, setIsSavingDetails] = useState(false);
   const [isDeactivating, setIsDeactivating] = useState(false);
   const [isSubmittingAdd, setIsSubmittingAdd] = useState(false);
   const [isSubmittingTemp, setIsSubmittingTemp] = useState(false);
   const [isAttachingDoc, setIsAttachingDoc] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(8);
+  const [pageSize, setPageSize] = useState(10);
   const [totalServerEmployees, setTotalServerEmployees] = useState(0);
 
   const [namePhoneSearch, setNamePhoneSearch] = useState('');
+  const debouncedNamePhoneSearch = useDebounce(namePhoneSearch, 350);
   const [roleFilter, setRoleFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [attendanceFilter, setAttendanceFilter] = useState('ALL');
@@ -277,6 +242,15 @@ export const EmployeeManagement = ({
   const [selectedDateRange, setSelectedDateRange] = useState(`${todayFormatted} - ${oneYearLaterFormatted}`);
   const [isDifferentDays, setIsDifferentDays] = useState(false);
   const [dayWiseHours, setDayWiseHours] = useState({});
+
+  const didYouMean = useMemo(() => {
+    return getDidYouMeanSuggestion(debouncedNamePhoneSearch);
+  }, [debouncedNamePhoneSearch]);
+
+  // Reset page when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedNamePhoneSearch, roleFilter, statusFilter, staffTypeFilter]);
 
   // Fetch live employees from server with pagination & filters
   const loadEmployees = async (page = currentPage, limit = pageSize) => {
@@ -288,7 +262,7 @@ export const EmployeeManagement = ({
       };
       if (gymId) params.gymId = gymId;
       if (gymPartnerId) params.gymPartnerId = gymPartnerId;
-      if (namePhoneSearch) params.search = namePhoneSearch;
+      if (debouncedNamePhoneSearch?.trim()) params.search = debouncedNamePhoneSearch.trim();
       if (roleFilter && roleFilter !== 'ALL') params.role = roleFilter;
       if (statusFilter && statusFilter !== 'ALL') params.status = statusFilter;
       if (staffTypeFilter && staffTypeFilter !== 'ALL') params.type = staffTypeFilter;
@@ -307,21 +281,11 @@ export const EmployeeManagement = ({
         branch: emp.branch || emp.gymName || gymName,
       }));
 
-      if (normalized.length > 0) {
-        setEmployeesList(normalized);
-      } else if (mappedGymStaff.length > 0 && !namePhoneSearch && roleFilter === 'ALL' && statusFilter === 'ALL' && staffTypeFilter === 'ALL') {
-        setEmployeesList(mappedGymStaff);
-        setTotalServerEmployees(mappedGymStaff.length);
-      } else {
-        setEmployeesList([]);
-      }
+      setEmployeesList(normalized);
     } catch (err) {
       console.error('Failed to load employees:', err);
-      // Graceful fallback to embedded gym trainers/staff
-      if (mappedGymStaff.length > 0) {
-        setEmployeesList(mappedGymStaff);
-        setTotalServerEmployees(mappedGymStaff.length);
-      }
+      setEmployeesList([]);
+      setTotalServerEmployees(0);
     } finally {
       setIsLoadingEmployees(false);
     }
@@ -329,7 +293,7 @@ export const EmployeeManagement = ({
 
   useEffect(() => {
     loadEmployees(currentPage, pageSize);
-  }, [gymId, gymPartnerId, currentPage, pageSize, namePhoneSearch, roleFilter, statusFilter, staffTypeFilter]);
+  }, [gymId, gymPartnerId, currentPage, pageSize, debouncedNamePhoneSearch, roleFilter, statusFilter, staffTypeFilter]);
 
   const currentMonthName = useMemo(() => {
     return new Date().toLocaleDateString('en-GB', { month: 'long' });
@@ -670,12 +634,19 @@ export const EmployeeManagement = ({
       },
       documents: editEmpDocs && editEmpDocs.length > 0 ? editEmpDocs : (selectedEmployee.documents || []),
       notes: values.notes !== undefined ? values.notes : (selectedEmployee.notes || ''),
-      managerPermissions: {
-        requireStaffApproval: values.requireStaffApproval !== undefined ? values.requireStaffApproval : (selectedEmployee.managerPermissions?.requireStaffApproval ?? true),
-        requirePlanSwitchApproval: values.requirePlanSwitchApproval !== undefined ? values.requirePlanSwitchApproval : (selectedEmployee.managerPermissions?.requirePlanSwitchApproval ?? true),
-        requireCancellationApproval: values.requireCancellationApproval !== undefined ? values.requireCancellationApproval : (selectedEmployee.managerPermissions?.requireCancellationApproval ?? true),
-        requireProfileEditApproval: values.requireProfileEditApproval !== undefined ? values.requireProfileEditApproval : (selectedEmployee.managerPermissions?.requireProfileEditApproval ?? true),
-      },
+      managerPermissions: isManager
+        ? (selectedEmployee.managerPermissions || {
+            requireStaffApproval: true,
+            requirePlanSwitchApproval: true,
+            requireCancellationApproval: true,
+            requireProfileEditApproval: true,
+          })
+        : {
+            requireStaffApproval: values.requireStaffApproval !== undefined ? values.requireStaffApproval : (selectedEmployee.managerPermissions?.requireStaffApproval ?? true),
+            requirePlanSwitchApproval: values.requirePlanSwitchApproval !== undefined ? values.requirePlanSwitchApproval : (selectedEmployee.managerPermissions?.requirePlanSwitchApproval ?? true),
+            requireCancellationApproval: values.requireCancellationApproval !== undefined ? values.requireCancellationApproval : (selectedEmployee.managerPermissions?.requireCancellationApproval ?? true),
+            requireProfileEditApproval: values.requireProfileEditApproval !== undefined ? values.requireProfileEditApproval : (selectedEmployee.managerPermissions?.requireProfileEditApproval ?? true),
+          },
     };
 
     try {
@@ -737,12 +708,24 @@ export const EmployeeManagement = ({
   };
 
   const handleReviewApproval = async (employeeId, action, reason = '') => {
+    const decision = action === 'approve' || action === 'Approved' ? 'Approved' : 'Rejected';
+    const payload = {
+      decision,
+      action,
+      adminRemarks: reason,
+      rejectionReason: reason,
+    };
     try {
-      await apiClient.put(`/employees/${employeeId}/approval`, {
-        action,
-        rejectionReason: reason,
-      });
-      message.success(action === 'approve' ? 'Employee approved successfully!' : 'Employee approval rejected.');
+      try {
+        await apiClient.put(`/employees/${employeeId}/approval`, payload);
+      } catch (putErr) {
+        if (putErr.response?.status === 404 || putErr.response?.status === 405) {
+          await apiClient.patch(`/employees/${employeeId}/approval`, payload);
+        } else {
+          throw putErr;
+        }
+      }
+      message.success(decision === 'Approved' ? 'Employee approved successfully!' : 'Employee approval rejected.');
       await loadEmployees(currentPage, pageSize);
     } catch (err) {
       message.error(err.response?.data?.message || `Failed to ${action} employee.`);
@@ -868,6 +851,18 @@ export const EmployeeManagement = ({
   };
 
   const handleAddTempStaffSubmit = async (values) => {
+    if (tempEmploymentType === 'Temporary') {
+      if (!values.startDate || !values.endDate) {
+        message.warning('Please select start date and end date for temporary staff.');
+        return;
+      }
+    } else if (tempEmploymentType === 'Part-Time') {
+      if (!workingDays || workingDays.length === 0) {
+        message.warning('Please select at least one working day for part-time staff.');
+        return;
+      }
+    }
+
     setIsSubmittingTemp(true);
     const activeGymId = gymId || user?.gym?._id || user?.gym?.id || user?.gymId || user?.id || user?.userId;
     const activeGymPartnerId = gymPartnerId || user?.gym?.partnerId || user?.partnerId || 'GYM1';
@@ -900,13 +895,13 @@ export const EmployeeManagement = ({
       pendingAction: 'NONE',
       type: tempEmploymentType || 'Temporary',
       schedule: {
-        workingDays,
+        workingDays: tempEmploymentType === 'Part-Time' ? workingDays : [],
         workingTimeStart: values.workingTimeStart ? values.workingTimeStart.format('hh:mm A') : '09:00 AM',
         workingTimeEnd: values.workingTimeEnd ? values.workingTimeEnd.format('hh:mm A') : '06:00 PM',
-        isDifferentDays,
-        dayWiseHours: dayWiseArray,
-        startDate: values.startDate ? values.startDate.format('YYYY-MM-DD') : '',
-        endDate: values.endDate ? values.endDate.format('YYYY-MM-DD') : '',
+        isDifferentDays: tempEmploymentType === 'Part-Time' ? isDifferentDays : false,
+        dayWiseHours: tempEmploymentType === 'Part-Time' ? dayWiseArray : [],
+        startDate: tempEmploymentType === 'Temporary' && values.startDate ? values.startDate.format('YYYY-MM-DD') : '',
+        endDate: tempEmploymentType === 'Temporary' && values.endDate ? values.endDate.format('YYYY-MM-DD') : '',
       },
       compensation: {
         payType: values.payType || 'Hourly',
@@ -994,14 +989,64 @@ export const EmployeeManagement = ({
     {
       title: 'Employee Name',
       key: 'employeeName',
-      render: (_, record) => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <Avatar src={record.avatar} size={38} style={{ flexShrink: 0 }} />
-          <div style={{ fontWeight: 650, color: isDarkMode ? '#ffffff' : '#0f172a', fontSize: 13 }}>
-            {record.name}
+      render: (_, record) => {
+        const hasPic = hasValidProfilePic(record.avatar);
+        const isSelf = Boolean(
+          (user?.email && record.email && user.email.toLowerCase() === record.email.toLowerCase()) ||
+          (user?.phone && record.phone && user.phone.replace(/[^0-9]/g, '') === String(record.phone).replace(/[^0-9]/g, '')) ||
+          (user?.employeeId && record.employeeId && user.employeeId === record.employeeId) ||
+          (user?.name && record.name && user.name.toLowerCase() === record.name.toLowerCase()) ||
+          (user?.id && (record._id === user.id || record.id === user.id || record.userId === user.id))
+        );
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Avatar
+              src={hasPic ? record.avatar : undefined}
+              icon={!hasPic ? <UserOutlined style={{ fontSize: 18 }} /> : undefined}
+              size={38}
+              style={{
+                backgroundColor: isDarkMode ? '#1e1b4b' : '#ede9fe',
+                color: '#6366f1',
+                flexShrink: 0,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            />
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontWeight: 650, color: isDarkMode ? '#ffffff' : '#0f172a', fontSize: 13 }}>
+                  {record.name}
+                </span>
+                {isSelf && (
+                  <Tag
+                    color="purple"
+                    style={{
+                      borderRadius: 'var(--radius-base)',
+                      fontSize: 10,
+                      fontWeight: 700,
+                      padding: '0 6px',
+                      lineHeight: '18px',
+                      margin: 0,
+                    }}
+                  >
+                    You
+                  </Tag>
+                )}
+              </div>
+              {record.role === 'Trainer' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2, fontSize: 11, color: '#f59e0b' }}>
+                  <StarFilled style={{ fontSize: 10 }} />
+                  <strong>{Number(record.rating || 4.9).toFixed(1)}</strong>
+                  <span style={{ color: isDarkMode ? '#888888' : '#64748b' }}>
+                    ({record.reviewsCount || 0} reviews)
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      ),
+        );
+      },
     },
     {
       title: 'Role',
@@ -1290,11 +1335,15 @@ export const EmployeeManagement = ({
       title: 'Actions',
       key: 'actions',
       width: 170,
+      fixed: 'right',
       render: (_, record) => {
         const isPendingApproval = record.approvalStatus === 'Pending Approval';
+        // Only Gym Admin / Owner can approve or reject staff; Managers can NEVER approve staff
+        const canApprove = isPendingApproval && !isManager;
+
         return (
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            {isPendingApproval ? (
+            {canApprove ? (
               <>
                 <Button
                   type="primary"
@@ -1306,7 +1355,10 @@ export const EmployeeManagement = ({
                     fontSize: 11,
                     fontWeight: 600,
                   }}
-                  onClick={() => handleReviewApproval(record.id || record._id, 'approve')}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleReviewApproval(record.id || record._id, 'approve');
+                  }}
                 >
                   Approve
                 </Button>
@@ -1318,17 +1370,56 @@ export const EmployeeManagement = ({
                     fontSize: 11,
                     fontWeight: 600,
                   }}
-                  onClick={() => handleReviewApproval(record.id || record._id, 'reject', 'Rejected by Gym Admin')}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleReviewApproval(record.id || record._id, 'reject', 'Rejected by Gym Admin');
+                  }}
                 >
                   Reject
                 </Button>
+              </>
+            ) : isPendingApproval && isManager ? (
+              <>
+                <Tag
+                  color="warning"
+                  style={{
+                    borderRadius: 'var(--radius-base)',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    padding: '2px 8px',
+                    margin: 0,
+                  }}
+                >
+                  Awaiting Admin
+                </Tag>
+                <Button
+                  type="text"
+                  size="small"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleOpenDetails(record);
+                  }}
+                  icon={<EyeOutlined style={{ color: '#722ed1', fontSize: 15 }} />}
+                  style={{
+                    backgroundColor: isDarkMode ? 'rgba(114, 46, 209, 0.15)' : '#f3effe',
+                    borderRadius: 'var(--radius-base)',
+                    width: 32,
+                    height: 32,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                />
               </>
             ) : (
               <>
                 <Button
                   type="text"
                   size="small"
-                  onClick={() => handleOpenDetails(record)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleOpenDetails(record);
+                  }}
                   icon={<EyeOutlined style={{ color: '#722ed1', fontSize: 15 }} />}
                   style={{
                     backgroundColor: isDarkMode ? 'rgba(114, 46, 209, 0.15)' : '#f3effe',
@@ -1343,7 +1434,10 @@ export const EmployeeManagement = ({
                 <Button
                   type="text"
                   size="small"
-                  onClick={() => handleOpenDetails(record)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleOpenDetails(record);
+                  }}
                   icon={<EditOutlined style={{ color: '#722ed1', fontSize: 15 }} />}
                   style={{
                     backgroundColor: isDarkMode ? 'rgba(114, 46, 209, 0.15)' : '#f3effe',
@@ -1361,7 +1455,7 @@ export const EmployeeManagement = ({
               menu={{
                 items: [
                   { key: 'view', label: 'View Profile', icon: <EyeOutlined />, onClick: () => handleOpenDetails(record) },
-                  { key: 'edit', label: 'Edit Permissions', icon: <EditOutlined />, onClick: () => handleOpenDetails(record) },
+                  { key: 'edit', label: 'Edit Profile & Details', icon: <EditOutlined />, onClick: () => handleOpenDetails(record) },
                   {
                     key: 'deactivate',
                     label: 'Deactivate',
@@ -1378,6 +1472,7 @@ export const EmployeeManagement = ({
               <Button
                 type="text"
                 size="small"
+                onClick={(e) => e.stopPropagation()}
                 icon={<MoreOutlined style={{ fontSize: 16, color: isDarkMode ? '#888888' : '#64748b' }} />}
                 style={{ width: 28, height: 32 }}
               />
@@ -1808,8 +1903,10 @@ export const EmployeeManagement = ({
                 { key: 'Part-Time', label: 'Part-Time' },
                 { key: 'Temporary', label: 'Temporary' },
               ].map((tab) => {
-                const count = tab.key === 'ALL'
-                  ? employeesList.length
+                const count = isLoadingEmployees
+                  ? 0
+                  : tab.key === 'ALL'
+                  ? totalServerEmployees || employeesList.length
                   : employeesList.filter((e) => (e.type || 'Full-Time') === tab.key).length;
                 const isSelected = staffTypeFilter === tab.key;
                 return (
@@ -1833,21 +1930,69 @@ export const EmployeeManagement = ({
             </div>
           </div>
         }
-        style={{
-          backgroundColor: 'var(--bg-surface-elevated)',
-          borderColor: 'var(--border-color)',
-          borderRadius: 'var(--radius-base)',
-          boxShadow: isDarkMode ? 'none' : '0 1px 3px rgba(0,0,0,0.03)',
-        }}
-        styles={{ body: { padding: '16px 20px' } }}
       >
+        {/* Typo-Tolerant "Did You Mean" Suggestion Banner */}
+        {didYouMean &&
+          debouncedNamePhoneSearch &&
+          didYouMean.toLowerCase() !== debouncedNamePhoneSearch.toLowerCase().trim() && (
+            <div
+              style={{
+                marginBottom: 16,
+                padding: '12px 18px',
+                borderRadius: 'var(--radius-base)',
+                backgroundColor: isDarkMode ? '#1e293b' : '#eff6ff',
+                border: `1px solid ${isDarkMode ? '#3b82f6' : '#bfdbfe'}`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: isDarkMode ? '#93c5fd' : '#1e40af' }}>
+                <SearchOutlined style={{ color: '#3b82f6' }} />
+                <span>
+                  Did you mean:{' '}
+                  <strong
+                    onClick={() => {
+                      setNamePhoneSearch(didYouMean);
+                    }}
+                    style={{
+                      cursor: 'pointer',
+                      color: '#2563eb',
+                      textDecoration: 'underline',
+                    }}
+                  >
+                    {didYouMean}
+                  </strong>
+                  ?
+                </span>
+              </div>
+              <Button
+                size="small"
+                type="primary"
+                ghost
+                onClick={() => {
+                  setNamePhoneSearch(didYouMean);
+                }}
+                style={{ fontWeight: 700, fontSize: 12, borderRadius: 6 }}
+              >
+                Search for &ldquo;{didYouMean}&rdquo;
+              </Button>
+            </div>
+          )}
+
         <Table
           loading={isLoadingEmployees}
           pagination={false}
           size="middle"
           scroll={{ x: 'max-content' }}
-          dataSource={filteredEmployees}
+          dataSource={isLoadingEmployees ? [] : filteredEmployees}
           columns={columns}
+          onRow={(record) => ({
+            onClick: () => handleOpenDetails(record),
+            style: { cursor: 'pointer' },
+          })}
         />
 
         {/* Custom Table Footer with Pagination & Show Dropdown */}
@@ -1863,33 +2008,10 @@ export const EmployeeManagement = ({
             borderTop: `1px solid ${isDarkMode ? '#1e1e1e' : '#f1f5f9'}`,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-            <div style={{ fontSize: 13, color: isDarkMode ? '#888888' : '#64748b' }}>
-              {totalServerEmployees === 0
-                ? 'Showing 0 employees'
-                : `Showing ${Math.min((currentPage - 1) * pageSize + 1, totalServerEmployees)} to ${Math.min(currentPage * pageSize, totalServerEmployees)} of ${totalServerEmployees} employee${totalServerEmployees === 1 ? '' : 's'}`}
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 13, color: isDarkMode ? '#8c8c8c' : '#64748b' }}>Show</span>
-              <Select
-                value={pageSize}
-                onChange={(newSize) => {
-                  setPageSize(newSize);
-                  setCurrentPage(1);
-                }}
-                options={[
-                  { value: 5, label: '5 / page' },
-                  { value: 8, label: '8 / page' },
-                  { value: 10, label: '10 / page' },
-                  { value: 20, label: '20 / page' },
-                  { value: 50, label: '50 / page' },
-                  { value: 100, label: '100 / page' },
-                ]}
-                size="small"
-                style={{ width: 115 }}
-              />
-            </div>
+          <div style={{ fontSize: 13, color: isDarkMode ? '#888888' : '#64748b' }}>
+            {totalServerEmployees === 0
+              ? 'Showing 0 employees'
+              : `Showing ${totalServerEmployees > 0 ? (currentPage - 1) * pageSize + 1 : 0} to ${Math.min(currentPage * pageSize, totalServerEmployees)} of ${totalServerEmployees} employee${totalServerEmployees === 1 ? '' : 's'}`}
           </div>
 
           <Pagination
@@ -1898,11 +2020,14 @@ export const EmployeeManagement = ({
               setCurrentPage(p);
               if (ps && ps !== pageSize) {
                 setPageSize(ps);
+                setCurrentPage(1);
               }
             }}
             total={totalServerEmployees}
             pageSize={pageSize}
-            showSizeChanger={false}
+            pageSizeOptions={['10', '20', '50', '100']}
+            showSizeChanger
+            showQuickJumper
           />
         </div>
       </Card>
@@ -1973,12 +2098,18 @@ export const EmployeeManagement = ({
                   title="Click to change employee photo"
                 >
                   <Avatar
-                    src={editPhoto || selectedEmployee.avatar}
+                    src={hasValidProfilePic(editPhoto || selectedEmployee.avatar) ? (editPhoto || selectedEmployee.avatar) : undefined}
+                    icon={!hasValidProfilePic(editPhoto || selectedEmployee.avatar) ? <UserOutlined style={{ fontSize: 28 }} /> : undefined}
                     size={64}
-                    style={{ border: '2px solid #722ed1' }}
-                  >
-                    {getGymInitials(selectedEmployee.name)}
-                  </Avatar>
+                    style={{
+                      border: '2px solid #722ed1',
+                      backgroundColor: isDarkMode ? '#1e1b4b' : '#ede9fe',
+                      color: '#6366f1',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  />
                   <div
                     style={{
                       position: 'absolute',
@@ -2155,6 +2286,7 @@ export const EmployeeManagement = ({
                         <Col xs={24} sm={12}>
                           <Form.Item label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Role / Designation <span style={{ color: '#ef4444' }}>*</span></span>} style={{ marginBottom: 14 }}>
                             <Select
+                              disabled={isManager}
                               value={detailRole}
                               onChange={(newRole) => {
                                 setDetailRole(newRole);
@@ -2181,7 +2313,7 @@ export const EmployeeManagement = ({
                         </Col>
                         <Col xs={24} sm={12}>
                           <Form.Item label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Platform Status</span>} name="status" initialValue="Active" style={{ marginBottom: 14 }}>
-                            <Select style={{ height: 40 }}>
+                            <Select disabled={isManager} style={{ height: 40 }}>
                               <Option value="Active">Active (Live in System)</Option>
                               <Option value="Inactive">Inactive</Option>
                               <Option value="On Leave">On Leave</Option>
@@ -2191,7 +2323,7 @@ export const EmployeeManagement = ({
                         </Col>
                       </Row>
 
-                      {detailRole === 'Manager' && (
+                      {detailRole === 'Manager' && !isManager && (
                         <Card
                           size="small"
                           style={{
@@ -3138,7 +3270,7 @@ export const EmployeeManagement = ({
               <Col xs={24} sm={24}>
                 <Form.Item label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Role <span style={{ color: '#ef4444' }}>*</span></span>} name="role" initialValue="Trainer" rules={[{ required: true }]} style={{ marginBottom: 14 }}>
                   <Select style={{ height: 40 }}>
-                    <Option value="Manager">Manager (Operational Admin)</Option>
+                    {!isManager && <Option value="Manager">Manager (Operational Admin)</Option>}
                     <Option value="Trainer">Trainer</Option>
                     <Option value="Customer Support">Customer Support</Option>
                     <Option value="Housekeeping">Housekeeping</Option>
@@ -3150,7 +3282,7 @@ export const EmployeeManagement = ({
               </Col>
             </Row>
 
-            {addRoleWatch === 'Manager' && (
+            {addRoleWatch === 'Manager' && !isManager && (
               <Card
                 size="small"
                 style={{
@@ -4117,130 +4249,137 @@ export const EmployeeManagement = ({
                 </Row>
               </div>
 
-              {/* Engagement Period */}
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: isDarkMode ? '#cccccc' : '#334155', marginBottom: 6 }}>
-                  Engagement Period (For Temporary Staff)
+              {/* Engagement Period (For Temporary Staff) */}
+              {tempEmploymentType === 'Temporary' && (
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: isDarkMode ? '#cccccc' : '#334155', marginBottom: 6 }}>
+                    Engagement Period (For Temporary Staff)
+                  </div>
+                  <Row gutter={10}>
+                    <Col span={12}>
+                      <Form.Item label={<span style={{ fontSize: 11 }}>Start Date <span style={{ color: '#ef4444' }}>*</span></span>} name="startDate" style={{ marginBottom: 4 }}>
+                        <DatePicker placeholder="Select start date" style={{ width: '100%', height: 38, borderRadius: 'var(--radius-base)' }} />
+                      </Form.Item>
+                    </Col>
+                    <Col span={12}>
+                      <Form.Item label={<span style={{ fontSize: 11 }}>End Date <span style={{ color: '#ef4444' }}>*</span></span>} name="endDate" style={{ marginBottom: 4 }}>
+                        <DatePicker placeholder="Select end date" style={{ width: '100%', height: 38, borderRadius: 'var(--radius-base)' }} />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  <div style={{ fontSize: 10.5, color: isDarkMode ? '#888888' : '#64748b', marginTop: 4 }}>
+                    Staff will be active only between the selected dates.
+                  </div>
                 </div>
-                <Row gutter={10}>
-                  <Col span={12}>
-                    <Form.Item label={<span style={{ fontSize: 11 }}>Start Date <span style={{ color: '#ef4444' }}>*</span></span>} name="startDate" style={{ marginBottom: 4 }}>
-                      <DatePicker placeholder="Select start date" style={{ width: '100%', height: 38, borderRadius: 'var(--radius-base)' }} />
-                    </Form.Item>
-                  </Col>
-                  <Col span={12}>
-                    <Form.Item label={<span style={{ fontSize: 11 }}>End Date <span style={{ color: '#ef4444' }}>*</span></span>} name="endDate" style={{ marginBottom: 4 }}>
-                      <DatePicker placeholder="Select end date" style={{ width: '100%', height: 38, borderRadius: 'var(--radius-base)' }} />
-                    </Form.Item>
-                  </Col>
-                </Row>
-                <div style={{ fontSize: 10.5, color: isDarkMode ? '#888888' : '#64748b', marginTop: 4 }}>
-                  Staff will be active only between the selected dates.
-                </div>
-              </div>
+              )}
             </Col>
 
             {/* Right Column: Schedule & Pay */}
             <Col xs={24} sm={12}>
-              {/* Working Days */}
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: isDarkMode ? '#cccccc' : '#334155', marginBottom: 6 }}>
-                  Schedule (For Part-Time Staff)
-                </div>
-                <div style={{ fontSize: 11.5, color: isDarkMode ? '#888888' : '#64748b', marginBottom: 6 }}>
-                  Working Days <span style={{ color: '#ef4444' }}>*</span>
-                </div>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => {
-                    const isSelected = workingDays.includes(day);
-                    return (
-                      <div
-                        key={day}
-                        onClick={() => {
-                          if (isSelected) setWorkingDays(workingDays.filter((d) => d !== day));
-                          else setWorkingDays([...workingDays, day]);
-                        }}
-                        style={{
-                          width: 44,
-                          height: 38,
-                          borderRadius: 'var(--radius-base)',
-                          backgroundColor: isSelected ? 'var(--color-primary)' : isDarkMode ? '#1a1a1a' : '#f1f5f9',
-                          color: isSelected ? '#ffffff' : isDarkMode ? '#cccccc' : '#334155',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: 11,
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          transition: 'all 0.2s ease',
-                        }}
-                      >
-                        <span>{day}</span>
-                        {isSelected && <CheckOutlined style={{ fontSize: 9, marginTop: 1 }} />}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Working Time */}
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 11.5, fontWeight: 600, color: isDarkMode ? '#cccccc' : '#334155', marginBottom: 6 }}>
-                  Working Time <span style={{ color: '#ef4444' }}>*</span>
-                </div>
-                {!isDifferentDays ? (
-                  <Row gutter={8} align="middle">
-                    <Col span={11}>
-                      <Form.Item name="workingTimeStart" noStyle>
-                        <TimePicker use12Hours format="h:mm a" placeholder="09:00 AM" style={{ width: '100%', height: 38, borderRadius: 'var(--radius-base)' }} />
-                      </Form.Item>
-                    </Col>
-                    <Col span={2} style={{ textAlign: 'center', color: '#888888' }}>to</Col>
-                    <Col span={11}>
-                      <Form.Item name="workingTimeEnd" noStyle>
-                        <TimePicker use12Hours format="h:mm a" placeholder="06:00 PM" style={{ width: '100%', height: 38, borderRadius: 'var(--radius-base)' }} />
-                      </Form.Item>
-                    </Col>
-                  </Row>
-                ) : (
-                  <div style={{ maxHeight: 160, overflowY: 'auto', paddingRight: 4 }}>
-                    {workingDays.length === 0 ? (
-                      <div style={{ fontSize: 11, color: '#fa8c16' }}>Please select working days first.</div>
-                    ) : (
-                      workingDays.map((day) => (
-                        <div key={day} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                          <span style={{ width: 36, fontSize: 11, fontWeight: 700 }}>{day}</span>
-                          <TimePicker
-                            use12Hours
-                            format="h:mm a"
-                            placeholder="Start"
-                            value={dayWiseHours[day]?.startTime}
-                            onChange={(t) => setDayWiseHours((prev) => ({ ...prev, [day]: { ...prev[day], startTime: t } }))}
-                            style={{ flex: 1, height: 32 }}
-                          />
-                          <span style={{ fontSize: 10, color: '#888888' }}>-</span>
-                          <TimePicker
-                            use12Hours
-                            format="h:mm a"
-                            placeholder="End"
-                            value={dayWiseHours[day]?.endTime}
-                            onChange={(t) => setDayWiseHours((prev) => ({ ...prev, [day]: { ...prev[day], endTime: t } }))}
-                            style={{ flex: 1, height: 32 }}
-                          />
-                        </div>
-                      ))
-                    )}
+              {/* Schedule (For Part-Time Staff) */}
+              {tempEmploymentType === 'Part-Time' && (
+                <>
+                  {/* Working Days */}
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: isDarkMode ? '#cccccc' : '#334155', marginBottom: 6 }}>
+                      Schedule (For Part-Time Staff)
+                    </div>
+                    <div style={{ fontSize: 11.5, color: isDarkMode ? '#888888' : '#64748b', marginBottom: 6 }}>
+                      Working Days <span style={{ color: '#ef4444' }}>*</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => {
+                        const isSelected = workingDays.includes(day);
+                        return (
+                          <div
+                            key={day}
+                            onClick={() => {
+                              if (isSelected) setWorkingDays(workingDays.filter((d) => d !== day));
+                              else setWorkingDays([...workingDays, day]);
+                            }}
+                            style={{
+                              width: 44,
+                              height: 38,
+                              borderRadius: 'var(--radius-base)',
+                              backgroundColor: isSelected ? 'var(--color-primary)' : isDarkMode ? '#1a1a1a' : '#f1f5f9',
+                              color: isSelected ? '#ffffff' : isDarkMode ? '#cccccc' : '#334155',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: 11,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                            }}
+                          >
+                            <span>{day}</span>
+                            {isSelected && <CheckOutlined style={{ fontSize: 9, marginTop: 1 }} />}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                )}
-                <Checkbox
-                  checked={isDifferentDays}
-                  onChange={(e) => setIsDifferentDays(e.target.checked)}
-                  style={{ fontSize: 11, color: isDarkMode ? '#888888' : '#64748b', marginTop: 6 }}
-                >
-                  Different time for different days
-                </Checkbox>
-              </div>
+
+                  {/* Working Time */}
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 11.5, fontWeight: 600, color: isDarkMode ? '#cccccc' : '#334155', marginBottom: 6 }}>
+                      Working Time <span style={{ color: '#ef4444' }}>*</span>
+                    </div>
+                    {!isDifferentDays ? (
+                      <Row gutter={8} align="middle">
+                        <Col span={11}>
+                          <Form.Item name="workingTimeStart" noStyle>
+                            <TimePicker use12Hours format="h:mm a" placeholder="09:00 AM" style={{ width: '100%', height: 38, borderRadius: 'var(--radius-base)' }} />
+                          </Form.Item>
+                        </Col>
+                        <Col span={2} style={{ textAlign: 'center', color: '#888888' }}>to</Col>
+                        <Col span={11}>
+                          <Form.Item name="workingTimeEnd" noStyle>
+                            <TimePicker use12Hours format="h:mm a" placeholder="06:00 PM" style={{ width: '100%', height: 38, borderRadius: 'var(--radius-base)' }} />
+                          </Form.Item>
+                        </Col>
+                      </Row>
+                    ) : (
+                      <div style={{ maxHeight: 160, overflowY: 'auto', paddingRight: 4 }}>
+                        {workingDays.length === 0 ? (
+                          <div style={{ fontSize: 11, color: '#fa8c16' }}>Please select working days first.</div>
+                        ) : (
+                          workingDays.map((day) => (
+                            <div key={day} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                              <span style={{ width: 36, fontSize: 11, fontWeight: 700 }}>{day}</span>
+                              <TimePicker
+                                use12Hours
+                                format="h:mm a"
+                                placeholder="Start"
+                                value={dayWiseHours[day]?.startTime}
+                                onChange={(t) => setDayWiseHours((prev) => ({ ...prev, [day]: { ...prev[day], startTime: t } }))}
+                                style={{ flex: 1, height: 32 }}
+                              />
+                              <span style={{ fontSize: 10, color: '#888888' }}>-</span>
+                              <TimePicker
+                                use12Hours
+                                format="h:mm a"
+                                placeholder="End"
+                                value={dayWiseHours[day]?.endTime}
+                                onChange={(t) => setDayWiseHours((prev) => ({ ...prev, [day]: { ...prev[day], endTime: t } }))}
+                                style={{ flex: 1, height: 32 }}
+                              />
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                    <Checkbox
+                      checked={isDifferentDays}
+                      onChange={(e) => setIsDifferentDays(e.target.checked)}
+                      style={{ fontSize: 11, color: isDarkMode ? '#888888' : '#64748b', marginTop: 6 }}
+                    >
+                      Different time for different days
+                    </Checkbox>
+                  </div>
+                </>
+              )}
 
               {/* Pay / Compensation */}
               <div style={{ marginBottom: 14 }}>
@@ -4408,7 +4547,20 @@ export const EmployeeManagement = ({
                 marginBottom: 18,
               }}
             >
-              <Avatar src={addedEmployeeData.avatar} size={60} style={{ border: '2px solid #722ed1', flexShrink: 0 }} />
+              <Avatar
+                src={hasValidProfilePic(addedEmployeeData.avatar) ? addedEmployeeData.avatar : undefined}
+                icon={!hasValidProfilePic(addedEmployeeData.avatar) ? <UserOutlined style={{ fontSize: 26 }} /> : undefined}
+                size={60}
+                style={{
+                  border: '2px solid #722ed1',
+                  backgroundColor: isDarkMode ? '#1e1b4b' : '#ede9fe',
+                  color: '#6366f1',
+                  flexShrink: 0,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              />
               <div>
                 <div style={{ fontSize: 18, fontWeight: 700, color: isDarkMode ? '#ffffff' : '#0f172a' }}>
                   {addedEmployeeData.name}

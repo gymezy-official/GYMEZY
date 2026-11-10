@@ -910,6 +910,7 @@ export const MembersTab = ({ topInset, navigation }) => {
                 : `${cancellations.length} total cancellation requests`}
             </Text>
           </View>
+          {/* cmd walk-in button
           <TouchableOpacity
             style={styles.headerActionBtn}
             onPress={() => setShowWalkInMemberModal(true)}
@@ -918,6 +919,7 @@ export const MembersTab = ({ topInset, navigation }) => {
             <MaterialIcons name="person-add" size={17} color="#FFFFFF" />
             <Text style={styles.headerActionBtnText}>+ Walk-in Member</Text>
           </TouchableOpacity>
+          cmd walk-in button */}
         </View>
 
         {/* 2. TOP PROMINENT SEGMENTED TABS (Exact Web App Top Navigation) */}
@@ -2225,7 +2227,10 @@ export const MembersTab = ({ topInset, navigation }) => {
                 } else if (isRejected) {
                   statusBadgeText = '#EF4444';
                   statusBadgeBg = isDark ? 'rgba(239, 68, 68, 0.15)' : '#FEF2F2';
-                  statusLabel = 'Rejected';
+                  statusLabel =
+                    req.status === 'REJECTED_BY_GYM' || req.adminStatus === 'REJECTED_BY_GYM'
+                      ? 'Rejected By Gym'
+                      : 'Rejected';
                 }
 
                 return (
@@ -3447,7 +3452,11 @@ export const MembersTab = ({ topInset, navigation }) => {
           <View
             style={[
               styles.modalContent,
-              { backgroundColor: isDark ? AppColors.darkCard : '#FFFFFF', maxHeight: '80%' },
+              {
+                backgroundColor: isDark ? AppColors.darkCard : '#FFFFFF',
+                maxHeight: '88%',
+                paddingBottom: insets.bottom > 0 ? insets.bottom + 16 : 24,
+              },
             ]}
           >
             {selectedCancelRequest && (

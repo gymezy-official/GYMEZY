@@ -71,6 +71,8 @@ import {
 } from '../redux/slices/gymSlice';
 import { useTheme } from '../theme/ThemeContext';
 import { apiClient } from '../services/apiClient';
+import { ExportModal } from '../general/components/ExportModal';
+import { downloadCSV, getDefaultExportFileName } from '../utils/exportHelper';
 import GymDetailsView from './components/GymDetailsView';
 
 const { Title, Text, Paragraph } = Typography;
@@ -234,6 +236,79 @@ export const GymsManagement = () => {
   const [searchSubscriptionType, setSearchSubscriptionType] = useState('All');
   const [searchLocation, setSearchLocation] = useState('');
   const [searchPhone, setSearchPhone] = useState('');
+
+  // Server-Side Export Modal & Execution
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleOpenExportModal = () => {
+    setIsExportModalOpen(true);
+  };
+
+  const executeExport = async ({ fileName, scope, dateRange }) => {
+    setIsExporting(true);
+    try {
+      const params = {
+        export: true,
+        limit: 0,
+        page: 1,
+        tab: currentTab,
+      };
+
+      if (scope === 'filtered') {
+        if (searchStatus !== 'All') params.status = searchStatus;
+        if (searchSubscriptionType !== 'All') params.subscriptionType = searchSubscriptionType;
+        if (debouncedLocation.trim()) params.location = debouncedLocation.trim();
+        if (debouncedPhone.trim()) params.phone = debouncedPhone.trim();
+        if (debouncedSearchName.trim()) params.search = debouncedSearchName.trim();
+      } else if (scope === 'custom' && dateRange) {
+        params.startDate = dateRange[0].toISOString();
+        params.endDate = dateRange[1].toISOString();
+      }
+
+      const res = await apiClient.get('/gyms/admin/fleet', { params });
+      const list = res.data?.data?.gyms || [];
+      if (list.length === 0) {
+        message.warning('No gym records found matching the requested scope.');
+        return;
+      }
+
+      const headers = [
+        'Partner ID',
+        'Gym Name',
+        'City',
+        'Area / Locality',
+        'Phone Number',
+        'Email Address',
+        'Approval Status',
+        'Operational Status',
+        'SaaS Subscription Plan',
+        'Created Date',
+      ];
+
+      const rows = list.map((g) => [
+        (g.partnerId && !/^[0-9a-fA-F]{24}$/.test(g.partnerId) && g.partnerId !== '-') ? g.partnerId : '-',
+        g.name || '',
+        g.city || '',
+        g.area || '',
+        g.phone || '',
+        g.email || '',
+        g.approvalStatus || 'Approved',
+        g.status || 'Active',
+        g.subscriptionType || 'Standard',
+        g.createdAt ? new Date(g.createdAt).toLocaleDateString('en-GB') : '—',
+      ]);
+
+      downloadCSV(fileName, headers, rows);
+      message.success(`Successfully exported ${list.length} gym records to ${fileName}.csv`);
+      setIsExportModalOpen(false);
+    } catch (err) {
+      console.error('Export gyms failed:', err);
+      message.error(err.message || 'Failed to export gym records');
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   // Debounced filter states to avoid rapid API thrashing
   const [debouncedSearchName, setDebouncedSearchName] = useState(searchName);
@@ -755,7 +830,7 @@ export const GymsManagement = () => {
               <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: isDarkMode ? '#ffffff' : '#0f172a' }}>
                 {selectedGym?.name || 'Gym Partner'}
               </h1>
-              {selectedGym?.partnerId ? (
+              {selectedGym?.partnerId && !/^[0-9a-fA-F]{24}$/.test(selectedGym.partnerId) && selectedGym.partnerId !== '-' ? (
                 <Tag color="blue" style={{ fontWeight: 700, fontSize: 13, padding: '2px 8px' }}>
                   {selectedGym.partnerId}
                 </Tag>
@@ -1215,7 +1290,6 @@ export const GymsManagement = () => {
                         <div><strong>Owner Name:</strong> {selectedGym?.ownerName || '—'}</div>
                         <div><strong>Phone:</strong> {selectedGym?.phone || '—'}</div>
                         <div><strong>Email:</strong> {selectedGym?.email || '—'}</div>
-                        <div><strong>Business Type:</strong> {selectedGym?.businessType || 'Private Limited'}</div>
                         <div><strong>GST / PAN:</strong> {selectedGym?.gstNumber || '—'} / {selectedGym?.panNumber || '—'}</div>
                         <div><strong>Address:</strong> {selectedGym?.address || selectedGym?.fullAddress || `${selectedGym?.area || ''} ${selectedGym?.city || ''}`}</div>
                       </div>
@@ -1491,7 +1565,7 @@ export const GymsManagement = () => {
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            onClick={() => navigate('/admin/onboarding')}
+            onClick={() => navigate('/admin/onboarding', { state: { reset: true } })}
             style={{
               height: 40,
               padding: '0 18px',
@@ -1617,7 +1691,7 @@ export const GymsManagement = () => {
             <Button
               size="small"
               icon={<DownloadOutlined />}
-              onClick={() => message.success('Exporting gyms list as CSV...')}
+              onClick={handleOpenExportModal}
             >
               Export CSV
             </Button>
@@ -1708,10 +1782,11 @@ export const GymsManagement = () => {
                 key: 'partnerId',
                 width: 110,
                 render: (_, record) => {
-                  const partnerIdDisplay = record.partnerId;
-                  if (!partnerIdDisplay) {
+                  const rawPartnerId = record.partnerId;
+                  const isGenerated = Boolean(rawPartnerId && typeof rawPartnerId === 'string' && !/^[0-9a-fA-F]{24}$/.test(rawPartnerId) && rawPartnerId.trim() !== '-');
+                  if (!isGenerated) {
                     return (
-                      <span style={{ color: isDarkMode ? '#888888' : '#94a3b8', fontWeight: 500, paddingLeft: 4 }}>
+                      <span style={{ color: isDarkMode ? '#888888' : '#94a3b8', fontWeight: 600, paddingLeft: 4 }}>
                         -
                       </span>
                     );
@@ -1728,7 +1803,7 @@ export const GymsManagement = () => {
                         letterSpacing: '0.3px',
                       }}
                     >
-                      {partnerIdDisplay}
+                      {rawPartnerId}
                     </span>
                   );
                 },
@@ -1915,10 +1990,11 @@ export const GymsManagement = () => {
                 key: 'partnerId',
                 width: 110,
                 render: (_, record) => {
-                  const partnerIdDisplay = record.partnerId;
-                  if (!partnerIdDisplay) {
+                  const rawPartnerId = record.partnerId;
+                  const isGenerated = Boolean(rawPartnerId && typeof rawPartnerId === 'string' && !/^[0-9a-fA-F]{24}$/.test(rawPartnerId) && rawPartnerId.trim() !== '-');
+                  if (!isGenerated) {
                     return (
-                      <span style={{ color: isDarkMode ? '#888888' : '#94a3b8', fontWeight: 500, paddingLeft: 4 }}>
+                      <span style={{ color: isDarkMode ? '#888888' : '#94a3b8', fontWeight: 600, paddingLeft: 4 }}>
                         -
                       </span>
                     );
@@ -1935,7 +2011,7 @@ export const GymsManagement = () => {
                         letterSpacing: '0.3px',
                       }}
                     >
-                      {partnerIdDisplay}
+                      {rawPartnerId}
                     </span>
                   );
                 },
@@ -2153,7 +2229,10 @@ export const GymsManagement = () => {
           </div>
         }
         open={isQuickAddModalOpen}
-        onCancel={() => setIsQuickAddModalOpen(false)}
+        onCancel={() => {
+          setIsQuickAddModalOpen(false);
+          quickAddForm.resetFields();
+        }}
         footer={null}
         width={680}
         destroyOnClose
@@ -2224,14 +2303,20 @@ export const GymsManagement = () => {
               icon={<RocketOutlined />}
               onClick={() => {
                 setIsQuickAddModalOpen(false);
-                navigate('/admin/onboarding');
+                quickAddForm.resetFields();
+                navigate('/admin/onboarding', { state: { reset: true } });
               }}
             >
               Open Full 8-Step Wizard
             </Button>
 
             <Space>
-              <Button onClick={() => setIsQuickAddModalOpen(false)}>Cancel</Button>
+              <Button onClick={() => {
+                setIsQuickAddModalOpen(false);
+                quickAddForm.resetFields();
+              }}>
+                Cancel
+              </Button>
               <Button type="primary" htmlType="submit" style={{ backgroundColor: '#4338ca', fontWeight: 700 }}>
                 Quick Publish Gym
               </Button>
@@ -2239,6 +2324,17 @@ export const GymsManagement = () => {
           </div>
         </Form>
       </Modal>
+
+      {/* Universal Server-Side Export Dialog */}
+      <ExportModal
+        open={isExportModalOpen}
+        onCancel={() => setIsExportModalOpen(false)}
+        title="Export Gyms Fleet"
+        defaultFileName={getDefaultExportFileName('Gyms_Fleet')}
+        totalAvailable={pagination?.total || reduxGyms.length}
+        onExport={executeExport}
+        loading={isExporting}
+      />
     </div>
   );
 };

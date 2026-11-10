@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { useTheme } from '../theme/ThemeContext';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppColors } from '../theme/appTheme';
 import { useToast } from './CustomScaffoldMessage';
 import { useAuth } from '../context/AuthContext';
@@ -118,8 +119,15 @@ export const AddEmployeeModal = ({
   const modalTitle = title || (initialEmployee ? 'Edit Employee Details' : 'Add New Employee');
   const modalSubtitle = subtitle || (initialEmployee ? 'Update employee role, delegation permissions, and info' : 'Add trainer, coach, or operational gym employee');
   const { isDark } = useTheme();
+  const insets = useSafeAreaInsets();
   const { showToast } = useToast();
-  const { gym } = useAuth();
+  const { gym, user } = useAuth();
+  const isCurrentUserManager = Boolean(
+    user?.isManager ||
+    user?.role === 'Manager' ||
+    user?.role === 'MANAGER' ||
+    String(user?.role || '').toLowerCase() === 'manager'
+  );
 
   // Basic Form States
   const [name, setName] = useState('');
@@ -443,12 +451,19 @@ export const AddEmployeeModal = ({
         status: initialEmployee?.status || 'Active',
         attendance: initialEmployee?.attendance || 'Present',
         accessType: isManager ? 'Admin' : accessType,
-        managerPermissions: {
-          requireStaffApproval,
-          requirePlanSwitchApproval,
-          requireCancellationApproval,
-          requireProfileEditApproval,
-        },
+        managerPermissions: isCurrentUserManager
+          ? (initialEmployee?.managerPermissions || {
+              requireStaffApproval: true,
+              requirePlanSwitchApproval: true,
+              requireCancellationApproval: true,
+              requireProfileEditApproval: true,
+            })
+          : {
+              requireStaffApproval,
+              requirePlanSwitchApproval,
+              requireCancellationApproval,
+              requireProfileEditApproval,
+            },
         ...(password?.trim() ? { password: password.trim() } : {}),
         previousEmployments: prevEmployments.filter(
           (p) => p.companyName?.trim() || p.designation?.trim()
@@ -534,7 +549,11 @@ export const AddEmployeeModal = ({
           <View
             style={[
               styles.modalSheet,
-              { backgroundColor: isDark ? AppColors.darkCard : '#FFFFFF', maxHeight: '92%' },
+              {
+                backgroundColor: isDark ? AppColors.darkCard : '#FFFFFF',
+                maxHeight: '92%',
+                paddingBottom: insets.bottom > 0 ? insets.bottom + 12 : (Platform.OS === 'ios' ? 34 : 24),
+              },
             ]}
           >
             {/* Header */}
@@ -681,9 +700,14 @@ export const AddEmployeeModal = ({
                     justifyContent: 'space-between',
                     height: 48,
                     marginBottom: showRoleDropdown ? 6 : 14,
+                    opacity: (isCurrentUserManager && !!initialEmployee) ? 0.7 : 1,
                   },
                 ]}
-                onPress={() => setShowRoleDropdown(!showRoleDropdown)}
+                onPress={() => {
+                  if (isCurrentUserManager && initialEmployee) return;
+                  setShowRoleDropdown(!showRoleDropdown);
+                }}
+                disabled={isCurrentUserManager && !!initialEmployee}
                 activeOpacity={0.7}
               >
                 <Text
@@ -695,11 +719,13 @@ export const AddEmployeeModal = ({
                 >
                   {isManagerRole(role) ? 'Manager (Operational Admin)' : role}
                 </Text>
-                <MaterialIcons
-                  name={showRoleDropdown ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
-                  size={24}
-                  color={isDark ? '#94A3B8' : '#64748B'}
-                />
+                {!(isCurrentUserManager && !!initialEmployee) && (
+                  <MaterialIcons
+                    name={showRoleDropdown ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                    size={24}
+                    color={isDark ? '#94A3B8' : '#64748B'}
+                  />
+                )}
               </TouchableOpacity>
 
               {showRoleDropdown && (
@@ -718,7 +744,7 @@ export const AddEmployeeModal = ({
                     shadowRadius: 6,
                   }}
                 >
-                  {ROLE_OPTIONS.map((r) => {
+                  {(isCurrentUserManager ? ROLE_OPTIONS.filter((r) => !isManagerRole(r)) : ROLE_OPTIONS).map((r) => {
                     const isSel = (isManagerRole(r) && isManagerRole(role)) || role === r;
                     return (
                       <TouchableOpacity
@@ -760,7 +786,7 @@ export const AddEmployeeModal = ({
               )}
 
               {/* Manager Delegation Permissions Card (Admin Approval Required) */}
-              {isManagerRole(role) && (
+              {isManagerRole(role) && !isCurrentUserManager && (
                 <View
                   style={{
                     backgroundColor: isDark ? '#1E1B4B' : '#F5F3FF',
@@ -1880,7 +1906,17 @@ export const AddEmployeeModal = ({
         onRequestClose={() => setShowAttachDocModal(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={[styles.pickerModalCard, { backgroundColor: isDark ? AppColors.darkCard : '#FFFFFF', maxHeight: 560, width: '100%' }]}>
+          <View
+            style={[
+              styles.pickerModalCard,
+              {
+                backgroundColor: isDark ? AppColors.darkCard : '#FFFFFF',
+                maxHeight: 560,
+                width: '100%',
+                paddingBottom: insets.bottom > 0 ? insets.bottom + 16 : 24,
+              },
+            ]}
+          >
             <View style={styles.pickerModalHeader}>
               <Text style={[styles.pickerModalTitle, { color: isDark ? '#FFFFFF' : '#0F172A' }]}>
                 {attachCategory === 'employment'

@@ -842,7 +842,20 @@ export const getAdminAllGymMemberships = async (req, res, next) => {
       ];
     }
 
-    const skip = (Number(page) - 1) * Number(limit);
+    // 5. Date Range Filter
+    if (req.query.startDate && req.query.endDate) {
+      const s = new Date(req.query.startDate);
+      const e = new Date(req.query.endDate);
+      if (!isNaN(s.getTime()) && !isNaN(e.getTime())) {
+        s.setHours(0, 0, 0, 0);
+        e.setHours(23, 59, 59, 999);
+        filter.createdAt = { $gte: s, $lte: e };
+      }
+    }
+
+    const isFetchAll = req.query.export === 'true' || limit === 'all' || limit === '0' || Number(limit) === 0;
+    const limitNum = isFetchAll ? 0 : Number(limit);
+    const skip = limitNum > 0 ? (Number(page) - 1) * limitNum : 0;
     const total = await Membership.countDocuments(filter);
 
     const memberships = await Membership.find(filter)
@@ -851,7 +864,7 @@ export const getAdminAllGymMemberships = async (req, res, next) => {
       .populate('trainerId', 'name employeeId specialty profilePicture')
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(Number(limit))
+      .limit(limitNum)
       .lean();
 
     const now = new Date();
@@ -1711,9 +1724,9 @@ export const gymActionReviewSwitchRequest = async (req, res, next) => {
       throw ApiError.notFound('Switch request not found.');
     }
 
-    if (request.status !== 'PENDING_GYM_APPROVAL') {
+    if (!['PENDING_GYM_APPROVAL', 'PENDING_GYM_ADMIN_APPROVAL'].includes(request.status)) {
       throw ApiError.badRequest(
-        `Cannot perform gym action. Request is in status '${request.status}', expected 'PENDING_GYM_APPROVAL'.`
+        `Cannot perform gym action. Request is in status '${request.status}', expected 'PENDING_GYM_APPROVAL' or 'PENDING_GYM_ADMIN_APPROVAL'.`
       );
     }
 
