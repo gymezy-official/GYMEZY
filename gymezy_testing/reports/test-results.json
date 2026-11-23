@@ -1,0 +1,365 @@
+{
+  "config": {
+    "argv": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\node_modules\\@playwright\\test\\cli.js",
+      "test",
+      "tests/owner/website/authentication/AUT_UI_AUTH_002.test.js"
+    ],
+    "configFile": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\playwright.config.js",
+    "rootDir": "D:/Work/Gymezy/GYMEZY/gymezy_testing/tests",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "D:/Work/Gymezy/GYMEZY/gymezy_testing/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "super-admin",
+        "name": "super-admin",
+        "testDir": "D:/Work/Gymezy/GYMEZY/gymezy_testing/tests/super-admin/website",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.test.js"
+        ],
+        "timeout": 45000
+      },
+      {
+        "outputDir": "D:/Work/Gymezy/GYMEZY/gymezy_testing/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "owner-portal",
+        "name": "owner-portal",
+        "testDir": "D:/Work/Gymezy/GYMEZY/gymezy_testing/tests/owner/website",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.test.js"
+        ],
+        "timeout": 45000
+      },
+      {
+        "outputDir": "D:/Work/Gymezy/GYMEZY/gymezy_testing/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "member-portal",
+        "name": "member-portal",
+        "testDir": "D:/Work/Gymezy/GYMEZY/gymezy_testing/tests/member/website",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.test.js"
+        ],
+        "timeout": 45000
+      },
+      {
+        "outputDir": "D:/Work/Gymezy/GYMEZY/gymezy_testing/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "api",
+        "name": "api",
+        "testDir": "D:/Work/Gymezy/GYMEZY/gymezy_testing/tests",
+        "testIgnore": [],
+        "testMatch": [
+          "**/AUT_API_*.test.js"
+        ],
+        "timeout": 45000
+      }
+    ],
+    "filteredProjects": [
+      {
+        "grep": {},
+        "grepInvert": null,
+        "outputDir": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "name": "super-admin",
+        "testDir": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\tests\\super-admin\\website",
+        "snapshotDir": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\tests\\super-admin\\website",
+        "testIgnore": [],
+        "testMatch": "**/*.test.js",
+        "timeout": 45000,
+        "use": {
+          "trace": "retain-on-failure",
+          "screenshot": "only-on-failure",
+          "video": "off",
+          "actionTimeout": 10000,
+          "navigationTimeout": 15000,
+          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.8127.18 Safari/537.36",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "screen": {
+            "width": 1920,
+            "height": 1080
+          },
+          "deviceScaleFactor": 1,
+          "isMobile": false,
+          "hasTouch": false,
+          "defaultBrowserType": "chromium",
+          "channel": "chrome",
+          "baseURL": "https://dev.admin.gymezy.com"
+        },
+        "dependencies": [],
+        "ignoreSnapshots": false,
+        "__projectId": "super-admin"
+      },
+      {
+        "grep": {},
+        "grepInvert": null,
+        "outputDir": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "name": "owner-portal",
+        "testDir": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\tests\\owner\\website",
+        "snapshotDir": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\tests\\owner\\website",
+        "testIgnore": [],
+        "testMatch": "**/*.test.js",
+        "timeout": 45000,
+        "use": {
+          "trace": "retain-on-failure",
+          "screenshot": "only-on-failure",
+          "video": "off",
+          "actionTimeout": 10000,
+          "navigationTimeout": 15000,
+          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.8127.18 Safari/537.36",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "screen": {
+            "width": 1920,
+            "height": 1080
+          },
+          "deviceScaleFactor": 1,
+          "isMobile": false,
+          "hasTouch": false,
+          "defaultBrowserType": "chromium",
+          "channel": "chrome",
+          "baseURL": "https://dev.owner.gymezy.com"
+        },
+        "dependencies": [],
+        "ignoreSnapshots": false,
+        "__projectId": "owner-portal"
+      },
+      {
+        "grep": {},
+        "grepInvert": null,
+        "outputDir": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "name": "member-portal",
+        "testDir": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\tests\\member\\website",
+        "snapshotDir": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\tests\\member\\website",
+        "testIgnore": [],
+        "testMatch": "**/*.test.js",
+        "timeout": 45000,
+        "use": {
+          "trace": "retain-on-failure",
+          "screenshot": "only-on-failure",
+          "video": "off",
+          "actionTimeout": 10000,
+          "navigationTimeout": 15000,
+          "baseURL": "https://dev.api.gymezy.com"
+        },
+        "dependencies": [],
+        "ignoreSnapshots": false,
+        "__projectId": "member-portal"
+      },
+      {
+        "grep": {},
+        "grepInvert": null,
+        "outputDir": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "name": "api",
+        "testDir": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\tests",
+        "snapshotDir": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\tests",
+        "testIgnore": [],
+        "testMatch": "**/AUT_API_*.test.js",
+        "timeout": 45000,
+        "use": {
+          "trace": "retain-on-failure",
+          "screenshot": "only-on-failure",
+          "video": "off",
+          "actionTimeout": 10000,
+          "navigationTimeout": 15000,
+          "baseURL": "https://dev.api.gymezy.com"
+        },
+        "dependencies": [],
+        "ignoreSnapshots": false,
+        "__projectId": "api"
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "list",
+        null
+      ],
+      [
+        "html",
+        {
+          "outputFolder": "./reports/playwright-html",
+          "open": "never"
+        }
+      ],
+      [
+        "json",
+        {
+          "outputFile": "./reports/test-results.json"
+        }
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "default",
+    "updateSourceMethod": "patch",
+    "version": "1.65.0",
+    "workers": 1,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "owner\\website\\authentication\\AUT_UI_AUTH_002.test.js",
+      "file": "owner/website/authentication/AUT_UI_AUTH_002.test.js",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Authentication - Owner Web Portal",
+          "file": "owner/website/authentication/AUT_UI_AUTH_002.test.js",
+          "line": 4,
+          "column": 6,
+          "specs": [
+            {
+              "title": "AUT_UI_AUTH_002: [P1|Security/RBAC] Owner with Pending Approval gym is blocked from operational routes @P1 @Regression",
+              "ok": false,
+              "tags": [
+                "P1",
+                "Regression"
+              ],
+              "tests": [
+                {
+                  "timeout": 45000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "owner-portal",
+                  "projectName": "owner-portal",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "failed",
+                      "duration": 11006,
+                      "error": {
+                        "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: locator('//*[contains(@data-testid, \\'pending-approval-banner\\') or contains(text(), \\'Pending Approval\\') or contains(@class, \\'ant-alert-warning\\')]').first()\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" locator('//*[contains(@data-testid, \\'pending-approval-banner\\') or contains(text(), \\'Pending Approval\\') or contains(@class, \\'ant-alert-warning\\')]').first() with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for locator('//*[contains(@data-testid, \\'pending-approval-banner\\') or contains(text(), \\'Pending Approval\\') or contains(@class, \\'ant-alert-warning\\')]').first()\u001b[22m\n",
+                        "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: locator('//*[contains(@data-testid, \\'pending-approval-banner\\') or contains(text(), \\'Pending Approval\\') or contains(@class, \\'ant-alert-warning\\')]').first()\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" locator('//*[contains(@data-testid, \\'pending-approval-banner\\') or contains(text(), \\'Pending Approval\\') or contains(@class, \\'ant-alert-warning\\')]').first() with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for locator('//*[contains(@data-testid, \\'pending-approval-banner\\') or contains(text(), \\'Pending Approval\\') or contains(@class, \\'ant-alert-warning\\')]').first()\u001b[22m\n\n    at D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\tests\\owner\\website\\authentication\\AUT_UI_AUTH_002.test.js:26:41",
+                        "location": {
+                          "file": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\tests\\owner\\website\\authentication\\AUT_UI_AUTH_002.test.js",
+                          "column": 41,
+                          "line": 26
+                        },
+                        "snippet": " \u001b[90m 24 |\u001b[39m     \u001b[90m// • pending-approval-banner is visible\u001b[39m\n \u001b[90m 25 |\u001b[39m     \u001b[36mconst\u001b[39m pendingBanner \u001b[33m=\u001b[39m page\u001b[33m.\u001b[39mlocator(\u001b[32m\"xpath=//*[contains(@data-testid, 'pending-approval-banner') or contains(text(), 'Pending Approval') or contains(@class, 'ant-alert-warning')]\"\u001b[39m)\u001b[33m;\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 26 |\u001b[39m     \u001b[36mawait\u001b[39m expect(pendingBanner\u001b[33m.\u001b[39mfirst())\u001b[33m.\u001b[39mtoBeVisible()\u001b[33m;\u001b[39m\n \u001b[90m    |\u001b[39m                                         \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 27 |\u001b[39m\n \u001b[90m 28 |\u001b[39m     \u001b[90m// • URL is redirected away from /memberships\u001b[39m\n \u001b[90m 29 |\u001b[39m     expect(page\u001b[33m.\u001b[39murl())\u001b[33m.\u001b[39mnot\u001b[33m.\u001b[39mtoMatch(\u001b[35m/\\/memberships\\/?$/\u001b[39m)\u001b[33m;\u001b[39m"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\tests\\owner\\website\\authentication\\AUT_UI_AUTH_002.test.js",
+                            "column": 41,
+                            "line": 26
+                          },
+                          "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: locator('//*[contains(@data-testid, \\'pending-approval-banner\\') or contains(text(), \\'Pending Approval\\') or contains(@class, \\'ant-alert-warning\\')]').first()\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" locator('//*[contains(@data-testid, \\'pending-approval-banner\\') or contains(text(), \\'Pending Approval\\') or contains(@class, \\'ant-alert-warning\\')]').first() with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for locator('//*[contains(@data-testid, \\'pending-approval-banner\\') or contains(text(), \\'Pending Approval\\') or contains(@class, \\'ant-alert-warning\\')]').first()\u001b[22m\n\n\n  24 |     // • pending-approval-banner is visible\n  25 |     const pendingBanner = page.locator(\"xpath=//*[contains(@data-testid, 'pending-approval-banner') or contains(text(), 'Pending Approval') or contains(@class, 'ant-alert-warning')]\");\n> 26 |     await expect(pendingBanner.first()).toBeVisible();\n     |                                         ^\n  27 |\n  28 |     // • URL is redirected away from /memberships\n  29 |     expect(page.url()).not.toMatch(/\\/memberships\\/?$/);\n    at D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\tests\\owner\\website\\authentication\\AUT_UI_AUTH_002.test.js:26:41"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-11-16T06:35:00.406Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\test-results\\authentication-AUT_UI_AUTH-f6ce5-tional-routes-P1-Regression-owner-portal\\test-failed-1.png"
+                        },
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\test-results\\authentication-AUT_UI_AUTH-f6ce5-tional-routes-P1-Regression-owner-portal\\error-context.md"
+                        },
+                        {
+                          "name": "trace",
+                          "contentType": "application/zip",
+                          "path": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\test-results\\authentication-AUT_UI_AUTH-f6ce5-tional-routes-P1-Regression-owner-portal\\trace.zip"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "D:\\Work\\Gymezy\\GYMEZY\\gymezy_testing\\tests\\owner\\website\\authentication\\AUT_UI_AUTH_002.test.js",
+                        "column": 41,
+                        "line": 26
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "2717240e071350be9c85-8f9cd2c7ea1fce5d021f",
+              "file": "owner/website/authentication/AUT_UI_AUTH_002.test.js",
+              "line": 5,
+              "column": 3
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-11-16T06:34:59.276Z",
+    "duration": 13728.876999999999,
+    "expected": 0,
+    "skipped": 0,
+    "unexpected": 1,
+    "flaky": 0
+  }
+}
