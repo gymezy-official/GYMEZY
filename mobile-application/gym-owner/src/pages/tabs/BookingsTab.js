@@ -21,6 +21,7 @@ import { useToast } from '../../widgets/CustomScaffoldMessage';
 import { useAuth } from '../../context/AuthContext';
 import { apiService } from '../../services/apiService';
 import { AddWalkInBookingModal } from '../../widgets/AddWalkInBookingModal';
+import { SkeletonBookingRow } from '../../widgets/Skeleton';
 
 export const SOURCE_FILTERS = [
   { key: 'ALL', label: 'All Sources' },
@@ -246,6 +247,7 @@ export const BookingsTab = ({ topInset, navigation }) => {
               {totalBookingsCount} passes and session bookings • Desk & App
             </Text>
           </View>
+          {/* cmd walk-in button
           <TouchableOpacity
             style={styles.headerActionBtn}
             onPress={() => setShowAddWalkInModal(true)}
@@ -254,6 +256,7 @@ export const BookingsTab = ({ topInset, navigation }) => {
             <MaterialIcons name="person-add" size={17} color="#FFFFFF" />
             <Text style={styles.headerActionBtnText}>+ Add Walk-in</Text>
           </TouchableOpacity>
+          cmd walk-in button */}
         </View>
 
         {/* 2. Key Metrics Stat Cards (Matches Web Dashboard) */}
@@ -421,11 +424,10 @@ export const BookingsTab = ({ topInset, navigation }) => {
 
         {/* 6. Bookings List Content */}
         {isLoading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={AppColors.primaryColor} />
-            <Text style={[styles.loadingText, { color: isDark ? '#94A3B8' : '#64748B' }]}>
-              Loading bookings and passes...
-            </Text>
+          <View style={{ paddingTop: 8 }}>
+            <SkeletonBookingRow />
+            <SkeletonBookingRow />
+            <SkeletonBookingRow />
           </View>
         ) : filteredBookings.length === 0 ? (
           <View
@@ -447,6 +449,7 @@ export const BookingsTab = ({ topInset, navigation }) => {
                 ? 'No bookings match your search query.'
                 : 'No day pass or session bookings recorded under this filter.'}
             </Text>
+            {/* cmd walk-in button
             <TouchableOpacity
               style={styles.emptyActionBtn}
               onPress={() => setShowAddWalkInModal(true)}
@@ -455,6 +458,7 @@ export const BookingsTab = ({ topInset, navigation }) => {
               <MaterialIcons name="person-add" size={17} color="#FFFFFF" />
               <Text style={styles.emptyActionBtnText}>Add Walk-in Pass</Text>
             </TouchableOpacity>
+            cmd walk-in button */}
           </View>
         ) : (
           <View style={{ gap: 12 }}>

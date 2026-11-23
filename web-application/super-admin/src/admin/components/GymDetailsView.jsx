@@ -647,11 +647,14 @@ export const GymDetailsView = ({
             showSearch
             optionFilterProp="children"
           >
-            {allGyms.map((g) => (
-              <Option key={g.id || g._id} value={g.id || g._id}>
-                {g.name} {g.partnerId ? `(${g.partnerId})` : '(-)'}
-              </Option>
-            ))}
+            {allGyms.map((g) => {
+              const isGen = Boolean(g.partnerId && !/^[0-9a-fA-F]{24}$/.test(g.partnerId) && g.partnerId !== '-');
+              return (
+                <Option key={g.id || g._id} value={g.id || g._id}>
+                  {g.name} {isGen ? `(${g.partnerId})` : '(-)'}
+                </Option>
+              );
+            })}
           </Select>
 
           {(gym.approvalStatus === 'Pending Approval' || gym.approvalStatus === 'On Hold' || gym.approvalStatus === 'Rejected' || Boolean(gym.pendingChanges && Object.keys(gym.pendingChanges).length > 0) || Boolean(gym.changesCount > 0)) ? (
@@ -739,6 +742,114 @@ export const GymDetailsView = ({
         </div>
       </div>
 
+      {/* REJECTION / HOLD FEEDBACK BANNER */}
+      {Boolean(
+        gym?.rejectionReason ||
+        gym?.rejectionNote ||
+        gym?.approvalStatus === 'Rejected' ||
+        gym?.approvalStatus === 'On Hold' ||
+        (gym?.remark && gym?.remark !== 'Approved and published by Super Admin')
+      ) && (
+        <div
+          style={{
+            padding: '16px 20px',
+            borderRadius: 8,
+            backgroundColor: isDarkMode
+              ? (gym?.approvalStatus === 'On Hold' ? 'rgba(245, 158, 11, 0.08)' : 'rgba(239, 68, 68, 0.08)')
+              : (gym?.approvalStatus === 'On Hold' ? '#fffbe7' : '#fef2f2'),
+            border: `1px solid ${gym?.approvalStatus === 'On Hold' ? '#fde68a' : '#fecaca'}`,
+            borderLeft: `5px solid ${gym?.approvalStatus === 'On Hold' ? '#f59e0b' : '#ef4444'}`,
+            marginBottom: 20,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <ExclamationCircleOutlined style={{ fontSize: 18, color: gym?.approvalStatus === 'On Hold' ? '#f59e0b' : '#ef4444' }} />
+              <span style={{ fontWeight: 700, fontSize: 14, color: isDarkMode ? '#f8fafc' : '#0f172a' }}>
+                {gym?.approvalStatus === 'On Hold' ? 'Application Put On Hold' : 'Rejection Feedback & Requirements'}
+              </span>
+              <Tag color={gym?.approvalStatus === 'On Hold' ? 'warning' : 'error'} style={{ fontWeight: 700 }}>
+                {gym?.approvalStatus === 'On Hold' ? 'On Hold' : 'Rejected'}
+              </Tag>
+            </div>
+            {gym?.rejectionReason && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: isDarkMode ? '#94a3b8' : '#64748b' }}>Reason:</span>
+                <Tag color="volcano" style={{ fontWeight: 700, fontSize: 12 }}>
+                  {gym.rejectionReason}
+                </Tag>
+              </div>
+            )}
+          </div>
+          {(gym?.rejectionNote || gym?.remark) && (
+            <div
+              style={{
+                fontSize: 13,
+                color: isDarkMode ? '#cbd5e1' : '#334155',
+                backgroundColor: isDarkMode ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.7)',
+                padding: '10px 14px',
+                borderRadius: 6,
+                border: `1px dashed ${gym?.approvalStatus === 'On Hold' ? '#fde68a' : '#fecaca'}`,
+                lineHeight: 1.5,
+              }}
+            >
+              <strong style={{ color: gym?.approvalStatus === 'On Hold' ? '#d97706' : '#dc2626' }}>
+                Admin Rejection Note:
+              </strong>{' '}
+              {gym.rejectionNote || gym.remark}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* PARTNER RESUBMISSION NOTES BANNER */}
+      {Boolean(gym?.resubmissionNote) && (
+        <div
+          style={{
+            padding: '16px 20px',
+            borderRadius: 8,
+            backgroundColor: isDarkMode ? 'rgba(59, 130, 246, 0.08)' : '#eff6ff',
+            border: '1px solid #bfdbfe',
+            borderLeft: '5px solid #2563eb',
+            marginBottom: 20,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <CheckCircleOutlined style={{ fontSize: 18, color: '#2563eb' }} />
+              <span style={{ fontWeight: 700, fontSize: 14, color: isDarkMode ? '#f8fafc' : '#0f172a' }}>
+                Owner Resubmission Description & Clarifications
+              </span>
+              <Tag color="processing" style={{ fontWeight: 700 }}>
+                Resubmitted by Partner
+              </Tag>
+            </div>
+            {gym?.resubmittedAt && (
+              <span style={{ fontSize: 12, color: isDarkMode ? '#94a3b8' : '#64748b' }}>
+                Resubmitted on: {new Date(gym.resubmittedAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+              </span>
+            )}
+          </div>
+          <div
+            style={{
+              fontSize: 13,
+              color: isDarkMode ? '#cbd5e1' : '#1e3a8a',
+              backgroundColor: isDarkMode ? 'rgba(0,0,0,0.25)' : '#ffffff',
+              padding: '12px 14px',
+              borderRadius: 6,
+              border: '1px solid #dbeafe',
+              lineHeight: 1.6,
+              fontWeight: 500,
+            }}
+          >
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#2563eb', marginBottom: 4 }}>
+              Changes & Corrections made by Gym Partner:
+            </div>
+            {gym.resubmissionNote}
+          </div>
+        </div>
+      )}
+
       {/* 2. MAIN GYM HERO HEADER CARD */}
       <Card
         style={{
@@ -787,7 +898,7 @@ export const GymDetailsView = ({
               <h1 style={{ fontSize: 24, fontWeight: 900, margin: 0, color: isDarkMode ? '#ffffff' : '#0f172a' }}>
                 {gym.name}
               </h1>
-              {gym.partnerId ? (
+              {gym.partnerId && !/^[0-9a-fA-F]{24}$/.test(gym.partnerId) && gym.partnerId !== '-' ? (
                 <Tag color="blue" style={{ fontWeight: 800, fontSize: 13, padding: '2px 10px', borderRadius: 6 }}>
                   {gym.partnerId}
                 </Tag>
@@ -971,7 +1082,7 @@ export const GymDetailsView = ({
                     >
                       <Descriptions column={{ xs: 1, sm: 2 }} bordered size="small">
                         <Descriptions.Item label="Gym Name">{gym.name}</Descriptions.Item>
-                        <Descriptions.Item label="Partner Code">{gym.partnerId || '-'}</Descriptions.Item>
+                        <Descriptions.Item label="Partner Code">{(gym.partnerId && !/^[0-9a-fA-F]{24}$/.test(gym.partnerId) && gym.partnerId !== '-') ? gym.partnerId : '-'}</Descriptions.Item>
                         <Descriptions.Item label="Gym Type">{gym.gymType || 'Unisex Fitness Center'}</Descriptions.Item>
                         <Descriptions.Item label="Gender Policy">{gym.genderAllowed || 'Unisex'}</Descriptions.Item>
                         <Descriptions.Item label="Owner Name">{gym.ownerName || gym.fullName || '—'}</Descriptions.Item>
@@ -1448,7 +1559,7 @@ export const GymDetailsView = ({
                       <Button
                         size="small"
                         type="link"
-                        icon={<FireOutlined style={{ color: '#ea580c' }} />}
+                        icon={<TeamOutlined style={{ color: '#ea580c' }} />}
                         onClick={() => setActiveTab('classes')}
                         style={{ marginLeft: 8, fontWeight: 600, color: '#ea580c' }}
                       >
@@ -1543,7 +1654,7 @@ export const GymDetailsView = ({
                       {
                         label: (
                           <span style={{ padding: '4px 8px', fontWeight: 600 }}>
-                            <FireOutlined style={{ marginRight: 6, color: '#ea580c' }} />
+                            <TeamOutlined style={{ marginRight: 6, color: '#ea580c' }} />
                             Group Classes{' '}
                             <Badge
                               count={bookingCounts.groupClasses}
@@ -1605,7 +1716,7 @@ export const GymDetailsView = ({
                         } else if (record.category === 'GROUP_CLASS') {
                           catTag = (
                             <Tag color="volcano" style={{ borderRadius: 6, fontWeight: 600, fontSize: 11 }}>
-                              <FireOutlined style={{ marginRight: 4 }} /> Group Class
+                              <TeamOutlined style={{ marginRight: 4 }} /> Group Class
                             </Tag>
                           );
                         } else {
@@ -1667,7 +1778,7 @@ export const GymDetailsView = ({
             key: 'classes',
             label: (
               <span>
-                <FireOutlined /> Group Classes ({createdSections.length})
+                <TeamOutlined /> Group Classes ({createdSections.length})
               </span>
             ),
             children: (
@@ -2520,23 +2631,13 @@ export const GymDetailsView = ({
                       </Col>
                     </Row>
                     <Row gutter={16}>
-                      <Col xs={24} sm={12}>
+                      <Col xs={24}>
                         <Form.Item
                           name="email"
                           label="Official Email"
                           rules={[{ type: 'email', message: 'Enter a valid email' }]}
                         >
                           <Input placeholder="gym@example.com" />
-                        </Form.Item>
-                      </Col>
-                      <Col xs={24} sm={12}>
-                        <Form.Item name="businessType" label="Business Entity Type">
-                          <Select>
-                            <Option value="Sole Proprietorship">Sole Proprietorship</Option>
-                            <Option value="Partnership">Partnership</Option>
-                            <Option value="Private Limited">Private Limited</Option>
-                            <Option value="LLP">LLP</Option>
-                          </Select>
                         </Form.Item>
                       </Col>
                     </Row>
@@ -2564,13 +2665,21 @@ export const GymDetailsView = ({
                     </Row>
                     <Row gutter={16}>
                       <Col xs={24} sm={12}>
-                        <Form.Item name="gstNumber" label="GST Number">
-                          <Input placeholder="15-digit GSTIN" />
+                        <Form.Item
+                          name="gstNumber"
+                          label="GST Number"
+                          normalize={(val) => (val ? val.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 15) : '')}
+                        >
+                          <Input maxLength={15} placeholder="15-digit GSTIN (e.g. 33AAAAA0000A1Z5)" />
                         </Form.Item>
                       </Col>
                       <Col xs={24} sm={12}>
-                        <Form.Item name="panNumber" label="PAN Number">
-                          <Input placeholder="10-digit PAN" />
+                        <Form.Item
+                          name="panNumber"
+                          label="PAN Number"
+                          normalize={(val) => (val ? val.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) : '')}
+                        >
+                          <Input maxLength={10} placeholder="10-digit PAN (e.g. ABCDE1234F)" />
                         </Form.Item>
                       </Col>
                     </Row>
@@ -2784,13 +2893,13 @@ export const GymDetailsView = ({
                     </Row>
                     <Row gutter={16}>
                       <Col xs={24} sm={12}>
-                        <Form.Item name="accountNumber" label="Account Number">
-                          <Input placeholder="Bank account number" />
+                        <Form.Item name="accountNumber" label="Account Number" normalize={(val) => val ? val.replace(/\D/g, '').slice(0, 18) : ''}>
+                          <Input placeholder="Bank account number" maxLength={18} inputMode="numeric" />
                         </Form.Item>
                       </Col>
                       <Col xs={24} sm={12}>
-                        <Form.Item name="ifscCode" label="IFSC Code">
-                          <Input placeholder="e.g. HDFC0001234" />
+                        <Form.Item name="ifscCode" label="IFSC Code" normalize={(val) => val ? val.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11) : ''}>
+                          <Input placeholder="e.g. HDFC0001234" maxLength={11} />
                         </Form.Item>
                       </Col>
                     </Row>
@@ -2822,7 +2931,7 @@ export const GymDetailsView = ({
       <Modal
         title={
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <FireOutlined style={{ color: '#ea580c' }} />
+            <TeamOutlined style={{ color: '#ea580c' }} />
             <span>{selectedSectionForModal?.title || 'Group Class Details'}</span>
           </div>
         }

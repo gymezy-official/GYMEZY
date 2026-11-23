@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getGymLogoUri } from '../../utils/mediaUtils';
 import { AddWalkInBookingModal } from '../../widgets/AddWalkInBookingModal';
 import { AddWalkInMemberModal } from '../../widgets/AddWalkInMemberModal';
+import { SkeletonMetricCard } from '../../widgets/Skeleton';
 
 export const WEEKLY_CHECKINS = [
   { day: 'Mon', count: 74, heightPct: 74 },
@@ -54,7 +55,15 @@ export const OverviewTab = ({
   const insets = useSafeAreaInsets();
   const { user, gym, refreshGymProfile } = useAuth();
 
+  const isManager = Boolean(
+    user?.isManager ||
+    user?.role === 'Manager' ||
+    user?.role === 'MANAGER' ||
+    String(user?.role || '').toLowerCase() === 'manager'
+  );
+
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoadingOverview, setIsLoadingOverview] = useState(!gym);
   const [employees, setEmployees] = useState([]);
   const [membershipSummary, setMembershipSummary] = useState(null);
   const [showWalkInModal, setShowWalkInModal] = useState(false);
@@ -81,6 +90,8 @@ export const OverviewTab = ({
       }
     } catch (err) {
       console.warn('Overview data fetch error:', err.message);
+    } finally {
+      setIsLoadingOverview(false);
     }
   }, [gym?.id, gym?._id, user?.gymId, refreshGymProfile]);
 
@@ -172,8 +183,8 @@ export const OverviewTab = ({
 
   const appBookingsCount = Number(gym?.appBookingsCount || gym?.completedBookingsCount || todayCheckinsCount || 0);
 
-  const metricCards = useMemo(
-    () => [
+  const metricCards = useMemo(() => {
+    const allCards = [
       {
         id: 'total-revenue',
         title: 'Total Revenue',
@@ -182,6 +193,7 @@ export const OverviewTab = ({
         iconColor: '#10B981',
         isTextIcon: true,
         textIcon: '₹',
+        isRevenue: true,
       },
       {
         id: 'member-revenue',
@@ -190,6 +202,7 @@ export const OverviewTab = ({
         iconBg: 'transparent',
         iconColor: '#3B82F6',
         iconName: 'person-add-alt-1',
+        isRevenue: true,
       },
       {
         id: 'app-booking-revenue',
@@ -199,6 +212,7 @@ export const OverviewTab = ({
         iconColor: '#8B5CF6',
         iconName: 'smartphone',
         onPress: onNavigateToBookings,
+        isRevenue: true,
       },
       {
         id: 'total-active-users',
@@ -227,18 +241,24 @@ export const OverviewTab = ({
         iconName: 'smartphone',
         onPress: onNavigateToBookings,
       },
-    ],
-    [
-      monthlyRevenue,
-      memberRevenue,
-      appBookingRevenue,
-      totalActiveUsers,
-      activePassesCount,
-      appBookingsCount,
-      onNavigateToMembers,
-      navigation,
-    ]
-  );
+    ];
+
+    if (isManager) {
+      return allCards.filter((card) => !card.isRevenue);
+    }
+    return allCards;
+  }, [
+    isManager,
+    monthlyRevenue,
+    memberRevenue,
+    appBookingRevenue,
+    totalActiveUsers,
+    activePassesCount,
+    appBookingsCount,
+    onNavigateToMembers,
+    onNavigateToBookings,
+    navigation,
+  ]);
 
   // Dynamic Staff Attendance Counts
   const totalStaff = employees.length;
@@ -374,7 +394,15 @@ export const OverviewTab = ({
 
       {/* 2. Key Business Metrics Grid (6 Unified Cards) */}
       <View style={styles.metricsGrid}>
-        {metricCards.map((card) => {
+        {isLoadingOverview && !gym ? (
+          <>
+            <SkeletonMetricCard />
+            <SkeletonMetricCard />
+            <SkeletonMetricCard />
+            <SkeletonMetricCard />
+          </>
+        ) : (
+          metricCards.map((card) => {
           const CardComp = card.onPress ? TouchableOpacity : View;
           return (
             <CardComp
@@ -433,7 +461,8 @@ export const OverviewTab = ({
               </View>
             </CardComp>
           );
-        })}
+        })
+      )}
       </View>
 
       {/* Quick Desk Actions Grid: Walk-in Booking & Walk-in Member */}
@@ -705,106 +734,108 @@ export const OverviewTab = ({
       </View>
 
       {/* Revenue Highlight Card */}
-      <View
-        style={[
-          styles.revenueCard,
-          {
-            backgroundColor: isDark ? AppColors.darkCard : '#FFFFFF',
-            borderColor: isDark ? AppColors.darkBorder : '#E2E8F0',
-          },
-        ]}
-      >
-        <View style={styles.revenueTopRow}>
-          <View>
-            <Text
-              style={[
-                styles.revenueLabel,
-                { color: isDark ? 'rgba(255,255,255,0.5)' : '#64748B' },
-              ]}
-            >
-              TOTAL REVENUE ({selectedPeriod.toUpperCase()})
-            </Text>
-            <Text
-              style={[
-                styles.revenueAmount,
-                { color: isDark ? '#FFFFFF' : '#0F172A' },
-              ]}
-            >
-              {periodRevenueFormatted}
-            </Text>
-          </View>
-          <View style={styles.growthBadge}>
-            <MaterialIcons name="trending-up" size={16} color={AppColors.secondaryColor} />
-            <Text style={styles.growthText}>+14.2%</Text>
-          </View>
-        </View>
-
+      {!isManager && (
         <View
           style={[
-            styles.statDivider,
-            { backgroundColor: isDark ? AppColors.darkBorder : '#F1F5F9' },
+            styles.revenueCard,
+            {
+              backgroundColor: isDark ? AppColors.darkCard : '#FFFFFF',
+              borderColor: isDark ? AppColors.darkBorder : '#E2E8F0',
+            },
           ]}
-        />
-
-        <View style={styles.miniStatsRow}>
-          <View style={styles.miniStatItem}>
-            <Text
-              style={[
-                styles.miniStatLabel,
-                { color: isDark ? 'rgba(255,255,255,0.5)' : '#94A3B8' },
-              ]}
-            >
-              Daily Average
-            </Text>
-            <Text
-              style={[
-                styles.miniStatVal,
-                { color: isDark ? '#FFFFFF' : '#0F172A' },
-              ]}
-            >
-              ₹6,180
-            </Text>
+        >
+          <View style={styles.revenueTopRow}>
+            <View>
+              <Text
+                style={[
+                  styles.revenueLabel,
+                  { color: isDark ? 'rgba(255,255,255,0.5)' : '#64748B' },
+                ]}
+              >
+                TOTAL REVENUE ({selectedPeriod.toUpperCase()})
+              </Text>
+              <Text
+                style={[
+                  styles.revenueAmount,
+                  { color: isDark ? '#FFFFFF' : '#0F172A' },
+                ]}
+              >
+                {periodRevenueFormatted}
+              </Text>
+            </View>
+            <View style={styles.growthBadge}>
+              <MaterialIcons name="trending-up" size={16} color={AppColors.secondaryColor} />
+              <Text style={styles.growthText}>+14.2%</Text>
+            </View>
           </View>
 
-          <View style={styles.miniStatItem}>
-            <Text
-              style={[
-                styles.miniStatLabel,
-                { color: isDark ? 'rgba(255,255,255,0.5)' : '#94A3B8' },
-              ]}
-            >
-              Renewal Rate
-            </Text>
-            <Text
-              style={[
-                styles.miniStatVal,
-                { color: isDark ? '#FFFFFF' : '#0F172A' },
-              ]}
-            >
-              92.4%
-            </Text>
-          </View>
+          <View
+            style={[
+              styles.statDivider,
+              { backgroundColor: isDark ? AppColors.darkBorder : '#F1F5F9' },
+            ]}
+          />
 
-          <View style={styles.miniStatItem}>
-            <Text
-              style={[
-                styles.miniStatLabel,
-                { color: isDark ? 'rgba(255,255,255,0.5)' : '#94A3B8' },
-              ]}
-            >
-              New Signups
-            </Text>
-            <Text
-              style={[
-                styles.miniStatVal,
-                { color: isDark ? '#FFFFFF' : '#0F172A' },
-              ]}
-            >
-              +{activeMembersCount > 0 ? Math.round(activeMembersCount * 0.15) : 28}
-            </Text>
+          <View style={styles.miniStatsRow}>
+            <View style={styles.miniStatItem}>
+              <Text
+                style={[
+                  styles.miniStatLabel,
+                  { color: isDark ? 'rgba(255,255,255,0.5)' : '#94A3B8' },
+                ]}
+              >
+                Daily Average
+              </Text>
+              <Text
+                style={[
+                  styles.miniStatVal,
+                  { color: isDark ? '#FFFFFF' : '#0F172A' },
+                ]}
+              >
+                ₹6,180
+              </Text>
+            </View>
+
+            <View style={styles.miniStatItem}>
+              <Text
+                style={[
+                  styles.miniStatLabel,
+                  { color: isDark ? 'rgba(255,255,255,0.5)' : '#94A3B8' },
+                ]}
+              >
+                Renewal Rate
+              </Text>
+              <Text
+                style={[
+                  styles.miniStatVal,
+                  { color: isDark ? '#FFFFFF' : '#0F172A' },
+                ]}
+              >
+                92.4%
+              </Text>
+            </View>
+
+            <View style={styles.miniStatItem}>
+              <Text
+                style={[
+                  styles.miniStatLabel,
+                  { color: isDark ? 'rgba(255,255,255,0.5)' : '#94A3B8' },
+                ]}
+              >
+                New Signups
+              </Text>
+              <Text
+                style={[
+                  styles.miniStatVal,
+                  { color: isDark ? '#FFFFFF' : '#0F172A' },
+                ]}
+              >
+                +{activeMembersCount > 0 ? Math.round(activeMembersCount * 0.15) : 28}
+              </Text>
+            </View>
           </View>
         </View>
-      </View>
+      )}
 
       {/* Weekly Check-In Activity Graph */}
       <View

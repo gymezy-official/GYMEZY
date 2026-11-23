@@ -225,10 +225,12 @@ const validateField = (field, value, form) => {
       if (!/^\d{6}$/.test(value.trim())) return 'Pincode must be exactly 6 digits';
       return '';
     case 'floorSpaceSqFt':
-      if (!value || Number(value) < 100) return 'Floor area must be at least 100 sq. ft.';
+      if (!value || Number(value) < 200) return 'Floor area must be at least 200 sq. ft.';
+      if (Number(value) > 100000) return 'Floor area cannot exceed 100,000 sq. ft.';
       return '';
     case 'maxFloorCapacity':
-      if (!value || Number(value) < 1) return 'Max capacity must be at least 1';
+      if (!value || Number(value) < 5) return 'Max capacity must be at least 5 athletes';
+      if (Number(value) > 2000) return 'Max capacity cannot exceed 2,000 athletes';
       return '';
     case 'logo':
       if (!value) return 'Gym brand logo is required';
@@ -268,6 +270,86 @@ const validateField = (field, value, form) => {
   }
 };
 
+const INITIAL_FORM_DATA = {
+  gymName: '',
+  tagline: '',
+  ownerName: '',
+  phone: '',
+  email: '',
+  password: '',
+  confirmPassword: '',
+  businessType: 'Private Limited',
+  yearEstablished: '',
+  gstNumber: '',
+  panNumber: '',
+  branches: '1',
+  businessCertificate: '',
+  businessCertificateName: '',
+  businessCertificateSize: '',
+
+  // Step 2: Location & GPS
+  address: '',
+  area: '',
+  city: 'Chennai',
+  state: 'Tamil Nadu',
+  pincode: '',
+  landmark: '',
+  lat: 13.0827,
+  lng: 80.2707,
+  googleMapsUrl: '',
+  timingMode: 'REGULAR',
+  weekdayOpen: '05:30 AM',
+  weekdayClose: '10:30 PM',
+  weekendOpen: '06:00 AM',
+  weekendClose: '09:00 PM',
+  morningOpen: '05:30 AM',
+  morningClose: '11:30 AM',
+  eveningOpen: '04:30 PM',
+  eveningClose: '10:30 PM',
+  isSplitShift: false,
+  isOpenHolidays: true,
+  is24Hours: false,
+
+  // Step 3: Facilities, Amenities & Photos
+  floorSpaceSqFt: 3500,
+  maxFloorCapacity: 45,
+  genderAllowed: 'Unisex',
+  logo: '',
+  coverPhoto: '',
+  galleryPhotos: [],
+  facilities: ['AC Gym', 'Locker Facility', 'Shower Available', 'Free Wi-Fi', 'CCTV 24/7'],
+  amenities: ['RO Drinking Water', 'Towel Service', 'Locker Key Padlocks'],
+  aboutText: '',
+
+  // Step 4: Pricing & Workouts
+  workouts: ['GYM / Strength', 'Cardio Fitness', 'HIIT (High Intensity)'],
+  rules: [...DEFAULT_RULES],
+  safetyMeasures: [...DEFAULT_SAFETY],
+  singleSessionPrice: 199,
+  weeklyPassPrice: 799,
+  fiveSessionPrice: 899,
+  monthlyPrice: 1999,
+  quarterlyPrice: 4999,
+  halfYearlyPrice: 8999,
+  annualPrice: 14999,
+  freeCancellationHours: 2,
+  refundPercentage: 100,
+  rescheduleAllowedCount: 2,
+
+  // Step 5: Bank & Submission
+  subscriptionType: 'Hybrid',
+  commissionRate: 10,
+  settlementCycle: 'Daily (T+1)',
+  accountHolder: '',
+  bankName: '',
+  accountNumber: '',
+  confirmAccountNumber: '',
+  ifscCode: '',
+  upiId: '',
+
+  agreedToTerms: false,
+};
+
 export const RegisterScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
   const { isDark, toggleTheme } = useTheme();
@@ -287,80 +369,21 @@ export const RegisterScreen = ({ navigation }) => {
   const [touched, setTouched] = useState({});
 
   // Form State matching web gym exactly
-  const [formData, setFormData] = useState({
-    gymName: '',
-    tagline: '',
-    ownerName: '',
-    phone: '',
-    email: '',
-    password: '',
-    confirmPassword: '',
-    businessType: 'Private Limited',
-    yearEstablished: '',
-    gstNumber: '',
-    panNumber: '',
-    branches: '1',
-    businessCertificate: '',
-    businessCertificateName: '',
-    businessCertificateSize: '',
+  const [formData, setFormData] = useState(() => ({ ...INITIAL_FORM_DATA }));
 
-    // Step 2: Location & GPS
-    address: '',
-    area: '',
-    city: 'Chennai',
-    state: 'Tamil Nadu',
-    pincode: '',
-    landmark: '',
-    lat: 13.0827,
-    lng: 80.2707,
-    googleMapsUrl: '',
-    weekdayOpen: '05:30 AM',
-    weekdayClose: '10:30 PM',
-    weekendOpen: '06:00 AM',
-    weekendClose: '09:00 PM',
-    isSplitShift: false,
-    isOpenHolidays: true,
-    is24Hours: false,
-
-    // Step 3: Facilities, Amenities & Photos
-    floorSpaceSqFt: 3500,
-    maxFloorCapacity: 45,
-    genderAllowed: 'Unisex',
-    logo: '',
-    coverPhoto: '',
-    galleryPhotos: [],
-    facilities: ['AC Gym', 'Locker Facility', 'Shower Available', 'Free Wi-Fi', 'CCTV 24/7'],
-    amenities: ['RO Drinking Water', 'Towel Service', 'Locker Key Padlocks'],
-    aboutText: '',
-
-    // Step 4: Pricing & Workouts
-    workouts: ['GYM / Strength', 'Cardio Fitness', 'HIIT (High Intensity)'],
-    rules: [...DEFAULT_RULES],
-    safetyMeasures: [...DEFAULT_SAFETY],
-    singleSessionPrice: 199,
-    weeklyPassPrice: 799,
-    fiveSessionPrice: 899,
-    monthlyPrice: 1999,
-    quarterlyPrice: 4999,
-    halfYearlyPrice: 8999,
-    annualPrice: 14999,
-    freeCancellationHours: 2,
-    refundPercentage: 100,
-    rescheduleAllowedCount: 2,
-
-    // Step 5: Bank & Submission
-    subscriptionType: 'Hybrid',
-    commissionRate: 10,
-    settlementCycle: 'Daily (T+1)',
-    accountHolder: '',
-    bankName: '',
-    accountNumber: '',
-    confirmAccountNumber: '',
-    ifscCode: '',
-    upiId: '',
-
-    agreedToTerms: false,
-  });
+  const resetForm = () => {
+    setFormData({ ...INITIAL_FORM_DATA });
+    setCurrentStep(1);
+    setErrors({});
+    setTouched({});
+    setNewRuleInput('');
+    setNewSafetyInput('');
+    setEmailCheckStatus('idle');
+    setEmailCheckError('');
+    setPhoneCheckStatus('idle');
+    setPhoneCheckError('');
+    setIsGpsPinned(false);
+  };
 
   // Rules and Safety dynamic inputs
   const [newRuleInput, setNewRuleInput] = useState('');
@@ -369,6 +392,8 @@ export const RegisterScreen = ({ navigation }) => {
   // Email availability check states
   const [emailCheckStatus, setEmailCheckStatus] = useState('idle'); // 'idle' | 'checking' | 'available' | 'exists'
   const [emailCheckError, setEmailCheckError] = useState('');
+  const [phoneCheckStatus, setPhoneCheckStatus] = useState('idle'); // 'idle' | 'checking' | 'available' | 'exists'
+  const [phoneCheckError, setPhoneCheckError] = useState('');
 
   // Password visibility
   const [showPassword, setShowPassword] = useState(false);
@@ -424,6 +449,56 @@ export const RegisterScreen = ({ navigation }) => {
     return () => clearTimeout(timer);
   }, [formData.email]);
 
+  // Check phone availability
+  const checkPhoneExistsApi = async (phoneToCheck) => {
+    const digits = String(phoneToCheck || '').replace(/\D/g, '');
+    if (digits.length !== 10) {
+      setPhoneCheckStatus('idle');
+      setPhoneCheckError('');
+      return null;
+    }
+
+    setPhoneCheckStatus('checking');
+    setPhoneCheckError('');
+
+    try {
+      const response = await apiService.checkPhone(digits);
+      const data = response?.data || response;
+      if (data?.isExisting || data?.isAvailable === false) {
+        setPhoneCheckStatus('exists');
+        setPhoneCheckError('An account with this mobile number already exists. Please log in or use a different number.');
+        return false;
+      } else {
+        setPhoneCheckStatus('available');
+        setPhoneCheckError('');
+        return true;
+      }
+    } catch (err) {
+      if (err?.message?.includes('already exists')) {
+        setPhoneCheckStatus('exists');
+        setPhoneCheckError('An account with this mobile number already exists. Please log in or use a different number.');
+        return false;
+      }
+      setPhoneCheckStatus('idle');
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    const digits = (formData.phone || '').replace(/\D/g, '');
+    if (digits.length !== 10) {
+      setPhoneCheckStatus('idle');
+      setPhoneCheckError('');
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      void checkPhoneExistsApi(digits);
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [formData.phone]);
+
   // Compute live validation errors
   const errors = useMemo(() => {
     const errs = {};
@@ -435,12 +510,19 @@ export const RegisterScreen = ({ navigation }) => {
     if (emailCheckError && !errs.email) {
       errs.email = emailCheckError;
     }
+    if (phoneCheckError && !errs.phone) {
+      errs.phone = phoneCheckError;
+    }
     return errs;
-  }, [formData, emailCheckError]);
+  }, [formData, emailCheckError, phoneCheckError]);
 
   const updateField = (field, value) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
     setTouched((prev) => ({ ...prev, [field]: true }));
+  };
+
+  const updateFields = (fieldsObj) => {
+    setFormData((prev) => ({ ...prev, ...fieldsObj }));
   };
 
   const markFieldTouched = (field) => {
@@ -641,6 +723,20 @@ export const RegisterScreen = ({ navigation }) => {
     setTouched(newTouched);
 
     if (currentStep === 1) {
+      if (phoneCheckStatus === 'checking') {
+        const isAvail = await checkPhoneExistsApi(formData.phone);
+        if (isAvail === false) {
+          showToast({ message: 'An account with this mobile number already exists.', isError: true });
+          return;
+        }
+      } else if (phoneCheckStatus === 'exists' || phoneCheckError) {
+        showToast({
+          message: 'An account with this mobile number already exists. Please log in or use a different number.',
+          isError: true,
+        });
+        return;
+      }
+
       if (emailCheckStatus === 'checking') {
         const isAvail = await checkEmailExistsApi(formData.email);
         if (isAvail === false) {
@@ -714,13 +810,32 @@ export const RegisterScreen = ({ navigation }) => {
         lng: Number(formData.lng) || 80.2707,
         googleMapsUrl: formData.googleMapsUrl.trim() || `https://maps.google.com/?q=${formData.lat},${formData.lng}`,
 
+        timingMode: formData.timingMode || 'REGULAR',
         weekdayOpen: formData.weekdayOpen,
         weekdayClose: formData.weekdayClose,
         weekendOpen: formData.weekendOpen,
         weekendClose: formData.weekendClose,
-        isSplitShift: formData.isSplitShift,
-        isOpenHolidays: formData.isOpenHolidays,
-        is24Hours: formData.is24Hours,
+        morningOpen: formData.morningOpen || '05:30 AM',
+        morningClose: formData.morningClose || '11:30 AM',
+        eveningOpen: formData.eveningOpen || '04:30 PM',
+        eveningClose: formData.eveningClose || '10:30 PM',
+        isSplitShift: formData.timingMode === 'SPLIT_SHIFT',
+        isOpenHolidays: formData.isOpenHolidays !== false,
+        is24Hours: formData.timingMode === '24_HOURS',
+        openingHours: {
+          mode: formData.timingMode || 'REGULAR',
+          weekdayOpen: formData.weekdayOpen,
+          weekdayClose: formData.weekdayClose,
+          weekendOpen: formData.weekendOpen,
+          weekendClose: formData.weekendClose,
+          morningOpen: formData.morningOpen || '05:30 AM',
+          morningClose: formData.morningClose || '11:30 AM',
+          eveningOpen: formData.eveningOpen || '04:30 PM',
+          eveningClose: formData.eveningClose || '10:30 PM',
+          isSplitShift: formData.timingMode === 'SPLIT_SHIFT',
+          isOpenHolidays: formData.isOpenHolidays !== false,
+          is24Hours: formData.timingMode === '24_HOURS',
+        },
 
         floorSpaceSqFt: Number(formData.floorSpaceSqFt),
         maxFloorCapacity: Number(formData.maxFloorCapacity),
@@ -765,8 +880,13 @@ export const RegisterScreen = ({ navigation }) => {
       const res = await apiService.registerGym(payload);
 
       if (res?.success) {
-        setRegisteredGymData(res.data);
+        setRegisteredGymData({
+          ...res.data,
+          ownerName: formData.ownerName,
+          email: formData.email,
+        });
         setIsSuccess(true);
+        resetForm();
         showToast({ message: 'Registration submitted successfully!', isSuccess: true });
       } else {
         showToast({ message: res?.message || 'Registration failed. Please review your details.', isError: true });
@@ -835,18 +955,25 @@ export const RegisterScreen = ({ navigation }) => {
 
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel}>Owner Name</Text>
-                <Text style={[styles.detailValue, { color: textColor }]}>{formData.ownerName}</Text>
+                <Text style={[styles.detailValue, { color: textColor }]}>
+                  {registeredGymData?.ownerName || '-'}
+                </Text>
               </View>
 
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel}>Login Email</Text>
-                <Text style={[styles.detailValue, { color: textColor }]}>{formData.email}</Text>
+                <Text style={[styles.detailValue, { color: textColor }]}>
+                  {registeredGymData?.email || '-'}
+                </Text>
               </View>
             </View>
 
             <TouchableOpacity
               style={[styles.primaryActionBtn, { backgroundColor: primaryNavy }]}
-              onPress={() => navigation.replace('Login')}
+              onPress={() => {
+                resetForm();
+                navigation.replace('Login');
+              }}
               activeOpacity={0.85}
             >
               <Text style={styles.primaryActionBtnText}>Back to Sign In</Text>
@@ -1001,11 +1128,12 @@ export const RegisterScreen = ({ navigation }) => {
                         style={[
                           styles.planBtn,
                           isSelected && {
-                            backgroundColor: isDark ? primaryNavy : '#FFFFFF',
-                            borderColor: isDark ? primaryNavy : '#CBD5E1',
-                            elevation: 2,
-                            shadowColor: '#000',
-                            shadowOpacity: 0.08,
+                            backgroundColor: isDark ? 'rgba(99, 102, 241, 0.22)' : '#FFFFFF',
+                            borderColor: isDark ? '#818CF8' : '#4F46E5',
+                            borderWidth: 2,
+                            elevation: 3,
+                            shadowColor: isDark ? '#818CF8' : '#000',
+                            shadowOpacity: isDark ? 0.35 : 0.08,
                             shadowRadius: 4,
                           },
                         ]}
@@ -1019,7 +1147,7 @@ export const RegisterScreen = ({ navigation }) => {
                               color: isSelected
                                 ? isDark
                                   ? '#FFFFFF'
-                                  : primaryNavy
+                                  : '#4F46E5'
                                 : isDark
                                 ? '#94A3B8'
                                 : '#475569',
@@ -1079,11 +1207,34 @@ export const RegisterScreen = ({ navigation }) => {
 
               {/* Mobile Phone */}
               <View style={styles.fieldGroup}>
-                <Text style={[styles.fieldLabel, { color: textColor }]}>
-                  Owner Mobile Number <Text style={styles.requiredStar}>*</Text>
-                </Text>
+                <View style={styles.fieldHeaderRow}>
+                  <Text style={[styles.fieldLabel, { color: textColor }]}>
+                    Owner Mobile Number <Text style={styles.requiredStar}>*</Text>
+                  </Text>
+                  {phoneCheckStatus === 'checking' && (
+                    <ActivityIndicator size="small" color={primaryNavy} />
+                  )}
+                  {phoneCheckStatus === 'available' && !errors.phone && (
+                    <Text style={{ fontSize: 11, color: '#16A34A', fontWeight: '700' }}>✓ Phone Available</Text>
+                  )}
+                  {phoneCheckStatus === 'exists' && (
+                    <Text style={{ fontSize: 11, color: '#EF4444', fontWeight: '700' }}>✕ Already Registered</Text>
+                  )}
+                </View>
                 <TextInput
-                  style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
+                  style={[
+                    styles.textInput,
+                    {
+                      backgroundColor: inputBg,
+                      borderColor:
+                        phoneCheckStatus === 'exists' || (touched.phone && errors.phone)
+                          ? '#EF4444'
+                          : phoneCheckStatus === 'available' && !errors.phone
+                          ? '#16A34A'
+                          : inputBorder,
+                      color: textColor,
+                    },
+                  ]}
                   keyboardType="phone-pad"
                   maxLength={10}
                   value={formData.phone}
@@ -1197,8 +1348,11 @@ export const RegisterScreen = ({ navigation }) => {
                   <TextInput
                     style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
                     autoCapitalize="characters"
+                    maxLength={15}
+                    placeholder="e.g. 33AAAAA0000A1Z5"
+                    placeholderTextColor={inputBorder}
                     value={formData.gstNumber}
-                    onChangeText={(val) => updateField('gstNumber', val.toUpperCase())}
+                    onChangeText={(val) => updateField('gstNumber', val.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 15))}
                     onBlur={() => markFieldTouched('gstNumber')}
                   />
                   {renderFieldError('gstNumber')}
@@ -1209,8 +1363,11 @@ export const RegisterScreen = ({ navigation }) => {
                   <TextInput
                     style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
                     autoCapitalize="characters"
+                    maxLength={10}
+                    placeholder="e.g. ABCDE1234F"
+                    placeholderTextColor={inputBorder}
                     value={formData.panNumber}
-                    onChangeText={(val) => updateField('panNumber', val.toUpperCase())}
+                    onChangeText={(val) => updateField('panNumber', val.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10))}
                     onBlur={() => markFieldTouched('panNumber')}
                   />
                   {renderFieldError('panNumber')}
@@ -1474,69 +1631,269 @@ export const RegisterScreen = ({ navigation }) => {
 
               {/* Operating Hours Divider */}
               <View style={[styles.divider, { backgroundColor: cardBorder }]} />
-              <Text style={[styles.sectionHeading, { color: textColor, marginBottom: 14 }]}>
-                Regular Operating Hours
-              </Text>
 
-              <View style={styles.rowTwoCols}>
-                <View style={[styles.fieldGroup, { flex: 1, marginRight: 8 }]}>
-                  <Text style={[styles.fieldLabel, { color: textColor }]}>Weekday Open (Mon – Fri)</Text>
-                  <TextInput
-                    style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
-                    value={formData.weekdayOpen}
-                    onChangeText={(val) => updateField('weekdayOpen', val)}
-                  />
-                </View>
-                <View style={[styles.fieldGroup, { flex: 1, marginLeft: 8 }]}>
-                  <Text style={[styles.fieldLabel, { color: textColor }]}>Weekday Close (Mon – Fri)</Text>
-                  <TextInput
-                    style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
-                    value={formData.weekdayClose}
-                    onChangeText={(val) => updateField('weekdayClose', val)}
-                  />
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                <Text style={[styles.sectionHeading, { color: textColor, marginBottom: 0, fontSize: 14 }]}>
+                  Facility Operating Hours & Shift Architecture
+                </Text>
+                <View
+                  style={{
+                    paddingHorizontal: 8,
+                    paddingVertical: 3,
+                    borderRadius: 6,
+                    backgroundColor:
+                      formData.timingMode === '24_HOURS'
+                        ? isDark ? 'rgba(34,197,94,0.15)' : '#F0FDF4'
+                        : formData.timingMode === 'SPLIT_SHIFT'
+                        ? isDark ? 'rgba(168,85,247,0.15)' : '#FAF5FF'
+                        : isDark ? 'rgba(59,130,246,0.15)' : '#EFF6FF',
+                    borderWidth: 1,
+                    borderColor:
+                      formData.timingMode === '24_HOURS'
+                        ? '#86EFAC'
+                        : formData.timingMode === 'SPLIT_SHIFT'
+                        ? '#D8B4FE'
+                        : '#BFDBFE',
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 11,
+                      fontWeight: '700',
+                      color:
+                        formData.timingMode === '24_HOURS'
+                          ? '#16A34A'
+                          : formData.timingMode === 'SPLIT_SHIFT'
+                          ? '#9333EA'
+                          : '#2563EB',
+                    }}
+                  >
+                    {formData.timingMode === '24_HOURS'
+                      ? '24/7 Mode'
+                      : formData.timingMode === 'SPLIT_SHIFT'
+                      ? 'Split Shift'
+                      : 'Regular Mode'}
+                  </Text>
                 </View>
               </View>
 
-              <View style={styles.rowTwoCols}>
-                <View style={[styles.fieldGroup, { flex: 1, marginRight: 8 }]}>
-                  <Text style={[styles.fieldLabel, { color: textColor }]}>Weekend Open (Sat – Sun)</Text>
-                  <TextInput
-                    style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
-                    value={formData.weekendOpen}
-                    onChangeText={(val) => updateField('weekendOpen', val)}
-                  />
-                </View>
-                <View style={[styles.fieldGroup, { flex: 1, marginLeft: 8 }]}>
-                  <Text style={[styles.fieldLabel, { color: textColor }]}>Weekend Close (Sat – Sun)</Text>
-                  <TextInput
-                    style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
-                    value={formData.weekendClose}
-                    onChangeText={(val) => updateField('weekendClose', val)}
-                  />
+              {/* Timing Mode Selector */}
+              <View style={{ marginBottom: 16 }}>
+                <Text style={[styles.fieldLabel, { color: textColor, marginBottom: 8 }]}>
+                  Select Operational Timing Model
+                </Text>
+                <View style={{ flexDirection: 'column', gap: 8 }}>
+                  {[
+                    { label: 'Single Shift (Continuous 12h/16h)', value: 'REGULAR' },
+                    { label: 'Split Shift (Morning + Evening)', value: 'SPLIT_SHIFT' },
+                    { label: '24 Hours (Round-the-clock)', value: '24_HOURS' },
+                  ].map((modeItem) => {
+                    const isSelected = (formData.timingMode || 'REGULAR') === modeItem.value;
+                    return (
+                      <TouchableOpacity
+                        key={modeItem.value}
+                        style={{
+                          paddingVertical: 10,
+                          paddingHorizontal: 14,
+                          borderRadius: 8,
+                          borderWidth: 1.5,
+                          borderColor: isSelected ? primaryNavy : inputBorder,
+                          backgroundColor: isSelected ? (isDark ? 'rgba(30,58,138,0.2)' : '#EFF6FF') : inputBg,
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                        }}
+                        onPress={() => {
+                          updateFields({
+                            timingMode: modeItem.value,
+                            is24Hours: modeItem.value === '24_HOURS',
+                            isSplitShift: modeItem.value === 'SPLIT_SHIFT',
+                          });
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <View
+                          style={{
+                            width: 18,
+                            height: 18,
+                            borderRadius: 9,
+                            borderWidth: 2,
+                            borderColor: isSelected ? primaryNavy : '#94A3B8',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            marginRight: 10,
+                          }}
+                        >
+                          {isSelected && (
+                            <View
+                              style={{
+                                width: 10,
+                                height: 10,
+                                borderRadius: 5,
+                                backgroundColor: primaryNavy,
+                              }}
+                            />
+                          )}
+                        </View>
+                        <Text
+                          style={{
+                            fontSize: 13,
+                            fontWeight: isSelected ? '700' : '600',
+                            color: isSelected ? (isDark ? '#60A5FA' : primaryNavy) : textColor,
+                          }}
+                        >
+                          {modeItem.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
               </View>
 
-              {/* Holiday & 24/7 Switches */}
+              {/* Mode-Specific Time Pickers */}
+              {(formData.timingMode === 'REGULAR' || !formData.timingMode) && (
+                <View>
+                  <View style={styles.rowTwoCols}>
+                    <View style={[styles.fieldGroup, { flex: 1, marginRight: 8 }]}>
+                      <Text style={[styles.fieldLabel, { color: textColor }]}>Weekday Open (Mon – Fri)</Text>
+                      <TextInput
+                        style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
+                        value={formData.weekdayOpen}
+                        onChangeText={(val) => updateField('weekdayOpen', val)}
+                        placeholder="05:30 AM"
+                        placeholderTextColor="#94A3B8"
+                      />
+                    </View>
+                    <View style={[styles.fieldGroup, { flex: 1, marginLeft: 8 }]}>
+                      <Text style={[styles.fieldLabel, { color: textColor }]}>Weekday Close (Mon – Fri)</Text>
+                      <TextInput
+                        style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
+                        value={formData.weekdayClose}
+                        onChangeText={(val) => updateField('weekdayClose', val)}
+                        placeholder="10:30 PM"
+                        placeholderTextColor="#94A3B8"
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.rowTwoCols}>
+                    <View style={[styles.fieldGroup, { flex: 1, marginRight: 8 }]}>
+                      <Text style={[styles.fieldLabel, { color: textColor }]}>Weekend Open (Sat – Sun)</Text>
+                      <TextInput
+                        style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
+                        value={formData.weekendOpen}
+                        onChangeText={(val) => updateField('weekendOpen', val)}
+                        placeholder="06:00 AM"
+                        placeholderTextColor="#94A3B8"
+                      />
+                    </View>
+                    <View style={[styles.fieldGroup, { flex: 1, marginLeft: 8 }]}>
+                      <Text style={[styles.fieldLabel, { color: textColor }]}>Weekend Close (Sat – Sun)</Text>
+                      <TextInput
+                        style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
+                        value={formData.weekendClose}
+                        onChangeText={(val) => updateField('weekendClose', val)}
+                        placeholder="09:00 PM"
+                        placeholderTextColor="#94A3B8"
+                      />
+                    </View>
+                  </View>
+                </View>
+              )}
+
+              {formData.timingMode === 'SPLIT_SHIFT' && (
+                <View style={{ marginBottom: 4 }}>
+                  <View
+                    style={{
+                      padding: 12,
+                      borderRadius: 8,
+                      backgroundColor: isDark ? 'rgba(168,85,247,0.1)' : '#FAF5FF',
+                      borderWidth: 1,
+                      borderColor: '#D8B4FE',
+                      marginBottom: 14,
+                    }}
+                  >
+                    <Text style={{ fontSize: 12, color: isDark ? '#E9D5FF' : '#6B21A8', lineHeight: 18 }}>
+                      <Text style={{ fontWeight: '700' }}>Split Shift Model: </Text>
+                      Common for fitness studios in India. Gym opens for early morning routines, closes during the afternoon for sanitization/break, and reopens for evening workouts. Bookable slots are generated only during active shifts.
+                    </Text>
+                  </View>
+
+                  <View style={styles.rowTwoCols}>
+                    <View style={[styles.fieldGroup, { flex: 1, marginRight: 8 }]}>
+                      <Text style={[styles.fieldLabel, { color: textColor }]}>Morning Shift Open</Text>
+                      <TextInput
+                        style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
+                        value={formData.morningOpen || '05:30 AM'}
+                        onChangeText={(val) => updateField('morningOpen', val)}
+                        placeholder="05:30 AM"
+                        placeholderTextColor="#94A3B8"
+                      />
+                    </View>
+                    <View style={[styles.fieldGroup, { flex: 1, marginLeft: 8 }]}>
+                      <Text style={[styles.fieldLabel, { color: textColor }]}>Morning Shift Close</Text>
+                      <TextInput
+                        style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
+                        value={formData.morningClose || '11:30 AM'}
+                        onChangeText={(val) => updateField('morningClose', val)}
+                        placeholder="11:30 AM"
+                        placeholderTextColor="#94A3B8"
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.rowTwoCols}>
+                    <View style={[styles.fieldGroup, { flex: 1, marginRight: 8 }]}>
+                      <Text style={[styles.fieldLabel, { color: textColor }]}>Evening Shift Open</Text>
+                      <TextInput
+                        style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
+                        value={formData.eveningOpen || '04:30 PM'}
+                        onChangeText={(val) => updateField('eveningOpen', val)}
+                        placeholder="04:30 PM"
+                        placeholderTextColor="#94A3B8"
+                      />
+                    </View>
+                    <View style={[styles.fieldGroup, { flex: 1, marginLeft: 8 }]}>
+                      <Text style={[styles.fieldLabel, { color: textColor }]}>Evening Shift Close</Text>
+                      <TextInput
+                        style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
+                        value={formData.eveningClose || '10:30 PM'}
+                        onChangeText={(val) => updateField('eveningClose', val)}
+                        placeholder="10:30 PM"
+                        placeholderTextColor="#94A3B8"
+                      />
+                    </View>
+                  </View>
+                </View>
+              )}
+
+              {formData.timingMode === '24_HOURS' && (
+                <View
+                  style={{
+                    padding: 14,
+                    borderRadius: 8,
+                    backgroundColor: isDark ? 'rgba(34,197,94,0.1)' : '#F0FDF4',
+                    borderWidth: 1,
+                    borderColor: '#86EFAC',
+                    marginBottom: 14,
+                  }}
+                >
+                  <Text style={{ fontSize: 12, color: isDark ? '#86EFAC' : '#166534', lineHeight: 18 }}>
+                    <Text style={{ fontWeight: '700' }}>24/7 Round-the-clock Facility: </Text>
+                    This gym operates continuously 24 hours a day, 7 days a week. Dynamic customer booking slots will be available around the clock.
+                  </Text>
+                </View>
+              )}
+
+              {/* Holiday Switch */}
               <View style={styles.switchesContainer}>
                 <View style={styles.switchRow}>
-                  <Text style={[styles.switchRowText, { color: textColor }]}>Open on Public Holidays</Text>
+                  <Text style={[styles.switchRowText, { color: textColor }]}>Facility Remains Open on Public Holidays</Text>
                   <Switch
                     trackColor={{ false: isDark ? '#3F3F46' : '#CBD5E1', true: primaryNavy }}
                     thumbColor={Platform.OS === 'ios' ? undefined : '#FFFFFF'}
                     ios_backgroundColor={isDark ? '#3F3F46' : '#CBD5E1'}
                     onValueChange={(val) => updateField('isOpenHolidays', val)}
-                    value={!!formData.isOpenHolidays}
-                  />
-                </View>
-
-                <View style={[styles.switchRow, { marginTop: 14 }]}>
-                  <Text style={[styles.switchRowText, { color: textColor }]}>24/7 Facility Access</Text>
-                  <Switch
-                    trackColor={{ false: isDark ? '#3F3F46' : '#CBD5E1', true: primaryNavy }}
-                    thumbColor={Platform.OS === 'ios' ? undefined : '#FFFFFF'}
-                    ios_backgroundColor={isDark ? '#3F3F46' : '#CBD5E1'}
-                    onValueChange={(val) => updateField('is24Hours', val)}
-                    value={!!formData.is24Hours}
+                    value={formData.isOpenHolidays !== false}
                   />
                 </View>
               </View>
@@ -2157,8 +2514,9 @@ export const RegisterScreen = ({ navigation }) => {
                   placeholder="50100456789012"
                   placeholderTextColor="#94A3B8"
                   keyboardType="number-pad"
+                  maxLength={18}
                   value={formData.accountNumber}
-                  onChangeText={(val) => updateField('accountNumber', val.replace(/\D/g, ''))}
+                  onChangeText={(val) => updateField('accountNumber', val.replace(/\D/g, '').slice(0, 18))}
                   onBlur={() => markFieldTouched('accountNumber')}
                 />
                 {renderFieldError('accountNumber')}
@@ -2174,8 +2532,9 @@ export const RegisterScreen = ({ navigation }) => {
                   placeholder="Re-enter bank account number"
                   placeholderTextColor="#94A3B8"
                   keyboardType="number-pad"
+                  maxLength={18}
                   value={formData.confirmAccountNumber}
-                  onChangeText={(val) => updateField('confirmAccountNumber', val.replace(/\D/g, ''))}
+                  onChangeText={(val) => updateField('confirmAccountNumber', val.replace(/\D/g, '').slice(0, 18))}
                   onBlur={() => markFieldTouched('confirmAccountNumber')}
                 />
                 {renderFieldError('confirmAccountNumber')}
@@ -2192,8 +2551,9 @@ export const RegisterScreen = ({ navigation }) => {
                     placeholder="HDFC0001234"
                     placeholderTextColor="#94A3B8"
                     autoCapitalize="characters"
+                    maxLength={11}
                     value={formData.ifscCode}
-                    onChangeText={(val) => updateField('ifscCode', val.toUpperCase())}
+                    onChangeText={(val) => updateField('ifscCode', val.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11))}
                     onBlur={() => markFieldTouched('ifscCode')}
                   />
                   {renderFieldError('ifscCode')}
@@ -2566,6 +2926,8 @@ const styles = StyleSheet.create({
   planBtn: {
     flex: 1,
     minWidth: '45%',
+    minHeight: 64,
+    justifyContent: 'center',
     paddingVertical: 10,
     paddingHorizontal: 10,
     borderRadius: 8,

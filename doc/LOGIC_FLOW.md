@@ -23,7 +23,7 @@
    - 4.2 [Workflow 2: Super Admin Verification & Decision Engine](#42-workflow-2-super-admin-verification--decision-engine)
    - 4.3 [Workflow 3: Application Status Tracking, Section-by-Section Edit & Resubmission](#43-workflow-3-application-status-tracking-section-by-section-edit--resubmission)
    - 4.4 [Workflow 4: Authentication, Token Management & Session Hydration](#44-workflow-4-authentication-token-management--session-hydration)
-   - 4.5 [Workflow 5: Gym Owner Operations & Live Staff/Employee Management](#45-workflow-5-gym-owner-operations--live-staffemployee-management)
+   - 4.5 [Workflow 5: Gym Admin Autonomous Operations & Manager Delegation Architecture](#45-workflow-5-gym-admin-autonomous-operations--manager-delegation-architecture)
    - 4.6 [Workflow 6: Contactless Access Control & Check-in Verification](#46-workflow-6-contactless-access-control--check-in-verification)
 5. [Complete REST API Contract & Endpoint Dictionary](#5-complete-rest-api-contract--endpoint-dictionary)
 6. [Database Schema Specifications & Mongoose Models](#6-database-schema-specifications--mongoose-models)
@@ -133,10 +133,10 @@ stateDiagram-v2
 |---|---|---|---|---|
 | *Unregistered* | `POST /api/v1/gyms/register` | `Pending Approval` | Public / Guest | Generates `partnerId` (`GYM00001`), creates `User` (`role: GYM_OWNER`, `isVerified: false`), saves complete gym payload, sets `status: 'Pending Approval'`. |
 | `Pending Approval` | `PATCH /api/v1/gyms/:id/status` (`In Review`) | `In Review` | `SUPER_ADMIN` | Admin begins document inspection. Notifies owner via dashboard. |
-| `Pending Approval` / `In Review` | `PATCH /api/v1/gyms/:id/status` (`Action Required`) | `Action Required` | `SUPER_ADMIN` | Requires `adminFeedback` string. Sets `rejectionReason`/`adminFeedback`, leaves `isVerified: false`. Unlocks editing modal on Owner Web & Mobile. |
-| `Pending Approval` / `In Review` | `PATCH /api/v1/gyms/:id/status` (`Rejected`) | `Rejected` | `SUPER_ADMIN` | Sets rejection remarks. Application cannot operate. |
-| `Pending Approval` / `In Review` | `PATCH /api/v1/gyms/:id/status` (`Approved`) | `Approved` | `SUPER_ADMIN` | Sets `isVerified: true`, `status: 'Approved'`. Activates Owner account login, unlocks full Owner Dashboard & Mobile App. |
-| `Action Required` | `PATCH /api/v1/gyms/:id/resubmit` | `Pending Approval` | `GYM_OWNER` / `SUPER_ADMIN` | Saves corrected form sections, clears previous blocker flag, timestamps `resubmittedAt`, moves back to Super Admin verification queue. |
+| `Pending Approval` / `In Review` | `PATCH /api/v1/gyms/:id/status` (`On Hold`) | `On Hold` | `SUPER_ADMIN` | Requires `rejectionReason` (category) and `rejectionNote`/`remark` (detailed feedback). Unlocks editing & resubmit modals on Owner Web & Mobile. |
+| `Pending Approval` / `In Review` | `PATCH /api/v1/gyms/:id/status` (`Rejected`) | `Rejected` | `SUPER_ADMIN` | Sets `rejectionReason` and `rejectionNote`. Preserves rejection feedback for review. Gym cannot operate until resubmitted and verified. |
+| `Pending Approval` / `In Review` | `PATCH /api/v1/gyms/:id/status` (`Approved`) | `Approved` | `SUPER_ADMIN` | Sets `approvalStatus: 'Approved'`, `status: 'Active'`. Clears prior rejection/resubmission flags. Unlocks full Owner Dashboard & Mobile App. |
+| `On Hold` / `Rejected` | `POST` or `PATCH /api/v1/gyms/:id/resubmit` | `Pending Approval` | `GYM_OWNER` / `SUPER_ADMIN` | Captures owner's `resubmissionNote` explaining corrections, preserves rejection feedback for audit, sets `resubmittedAt: Date.now()`, moves back to Super Admin queue. |
 | `Approved` | `PATCH /api/v1/gyms/:id/status` (`Suspended`) | `Suspended` | `SUPER_ADMIN` | Temporarily delists facility from public discovery; freezes owner payout transfers. |
 
 ---
@@ -341,6 +341,7 @@ sequenceDiagram
         DB-->>API: Saved Record
         API-->>Web: 200 OK (Instant Live Application)
     end
+```
 
 ---
 
@@ -518,14 +519,23 @@ const GymSchema = new mongoose.Schema({
   // Application Lifecycle Status
   status: {
     type: String,
-    enum: ['Pending Approval', 'In Review', 'Action Required', 'Approved', 'Rejected', 'Suspended'],
-    default: 'Pending Approval',
+    enum: ['Active', 'Pending', 'On Hold', 'Inactive', 'Suspended', 'Rejected'],
+    default: 'Active',
+    index: true
+  },
+  approvalStatus: {
+    type: String,
+    enum: ['Approved', 'Pending Approval', 'On Hold', 'Rejected'],
+    default: 'Approved',
     index: true
   },
   isVerified: { type: Boolean, default: false },
   adminFeedback: { type: String, default: '' },
   rejectionReason: { type: String, default: '' },
-  resubmittedAt: { type: Date }
+  rejectionNote: { type: String, default: '' },
+  remark: { type: String, default: '' },
+  resubmissionNote: { type: String, default: '' },
+  resubmittedAt: { type: Date, default: null }
 }, { timestamps: true });
 ```
 
