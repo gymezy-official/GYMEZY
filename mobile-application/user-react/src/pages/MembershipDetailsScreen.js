@@ -25,6 +25,7 @@ import { useBookingRepository } from '../data/BookingContext';
 import { useToast } from '../widgets/CustomScaffoldMessage';
 import { calculateMembershipProgress } from '../utils/dateUtils';
 import { membershipService } from '../services/membershipService';
+import { paymentService } from '../services/paymentService';
 import { apiService } from '../services/apiService';
 import { gymService } from '../services/gymService';
 import { useAuth } from '../context/AuthContext';
@@ -298,7 +299,7 @@ export const MembershipDetailsScreen = ({ route, navigation }) => {
   useEffect(() => {
     let active = true;
     const resolvedUserId = user?._id || user?.id || user?.userId || membership?.userId;
-    const targetMembershipId = membership._id || membership.id || membership.membershipId;
+    const targetMembershipId = membership._id || membership.id;
 
     const loadCancellationNegotiation = async () => {
       try {
@@ -306,17 +307,14 @@ export const MembershipDetailsScreen = ({ route, navigation }) => {
           resolvedUserId,
           targetMembershipId
         );
-        const targetIds = [membership._id, membership.id, membership.membershipId].filter(Boolean).map(String);
+        const targetDbId = String(targetMembershipId);
         const current = Array.isArray(negotiations)
           ? negotiations.find((item) => {
               if (!item || item.status === 'CANCELLED_BY_USER') return false;
               const m = item.membershipId;
-              const itemIds = [
-                m && typeof m === 'object' ? (m._id ? String(m._id) : null) : (m ? String(m) : null),
-                m && typeof m === 'object' ? (m.membershipId ? String(m.membershipId) : null) : null,
-                m && typeof m === 'object' ? (m.id ? String(m.id) : null) : null,
-              ].filter(Boolean);
-              return targetIds.some((tid) => itemIds.includes(tid));
+              const itemDbId =
+                m && typeof m === 'object' ? (m._id || m.id ? String(m._id || m.id) : null) : (m ? String(m) : null);
+              return itemDbId === targetDbId;
             })
           : null;
 
@@ -332,7 +330,7 @@ export const MembershipDetailsScreen = ({ route, navigation }) => {
       active = false;
       if (refreshInterval) clearInterval(refreshInterval);
     };
-  }, [membership._id, membership.id, membership.membershipId, membership.status, user?._id, user?.id]);
+  }, [membership._id, membership.id, membership.status, user?._id, user?.id]);
 
   // Plan Switch & Proration States
   const [showSwitchSheet, setShowSwitchSheet] = useState(false);
@@ -450,10 +448,10 @@ export const MembershipDetailsScreen = ({ route, navigation }) => {
       try {
         const requests = await membershipService.fetchMySwitchRequests();
         if (isMounted && Array.isArray(requests)) {
-          const currentMemId = String(membership._id || membership.id || membership.membershipId);
+          const currentMemId = String(membership._id || membership.id || '');
           const activeReq = requests.find((r) => {
             const reqMemId = String(
-              r.membershipId?._id || r.membershipId?.id || r.membershipId?.membershipId || r.membershipId
+              r.membershipId?._id || r.membershipId?.id || r.membershipId || ''
             );
             return (
               reqMemId === currentMemId &&
@@ -674,14 +672,32 @@ export const MembershipDetailsScreen = ({ route, navigation }) => {
     if (!selectedTargetPlan) return;
     setIsSubmittingSwitch(true);
     try {
-      const result = await membershipService.requestSwitchPlan(membership._id || membership.id, {
+      const switchPayload = {
+        membershipId: membership._id || membership.id,
         targetTier: selectedTargetPlan.tierId || selectedTargetPlan.name,
         targetPlanId: selectedTargetPlan.planId || selectedTargetPlan.tierId,
         downgradeSettlementPreference: downgradeOption,
-        paymentMethod: 'UPI',
-        transactionId: `TXN_SW_${Date.now()}`,
         useWalletBalance: false,
-      });
+      };
+      const netPayableAmount = Number(
+        switchQuote?.financialBreakdown?.netAmountToPayINR ??
+        switchQuote?.financialBreakdown?.netAmountToPay ??
+        (switchQuote?.financialBreakdown?.netAmountToPayPaise != null
+          ? switchQuote.financialBreakdown.netAmountToPayPaise / 100
+          : switchQuote?.netPayable) ??
+        0
+      );
+      const isUpgradePayment = netPayableAmount > 0;
+      const result = isUpgradePayment
+        ? await paymentService.payWithRazorpay({
+            flowType: 'PLAN_SWITCH_UPGRADE',
+            payload: switchPayload,
+            description: `Upgrade to ${switchPayload.targetTier}`,
+          })
+        : await membershipService.requestSwitchPlan(membership._id || membership.id, {
+            ...switchPayload,
+            paymentMethod: 'Wallet',
+          });
       setPendingSwitchRequest(result);
       setShowSwitchSheet(false);
       showToast({

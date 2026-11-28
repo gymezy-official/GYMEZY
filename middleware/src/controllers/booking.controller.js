@@ -13,6 +13,7 @@ import { getSearchTerm, escapeRegex, parsePagination } from '../utils/searchHelp
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { findOrCreateWalkInCustomer } from '../utils/walkInHelper.js';
 import { isBookingCompleted, evaluateBookingStatus, calculateBookingCancellationQuote } from '../services/bookingProration.service.js';
+import { refundPaymentForReference } from '../services/razorpay.service.js';
 
 /**
  * Resolve User ID from token or request body
@@ -911,13 +912,16 @@ export const createWalkInBooking = asyncHandler(async (req, res) => {
  * Get Cancellation Quote (Preview)
  * GET /api/v1/bookings/:id/cancellation-quote
  */
+const buildBookingLookupQuery = (id, userId = null) => {
+  if (mongoose.Types.ObjectId.isValid(id)) {
+    return { _id: id };
+  }
+  return userId ? { bookingId: id, userId } : { bookingId: id };
+};
+
 export const getBookingCancellationQuote = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const isObjectId = mongoose.Types.ObjectId.isValid(id);
-
-  const booking = await Booking.findOne(
-    isObjectId ? { $or: [{ _id: id }, { bookingId: id }] } : { bookingId: id }
-  );
+  const booking = await Booking.findOne(buildBookingLookupQuery(id, req.user?._id));
 
   if (!booking) {
     throw ApiError.notFound('Booking not found.');
@@ -934,11 +938,8 @@ export const getBookingCancellationQuote = asyncHandler(async (req, res) => {
 export const cancelBooking = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { reason = 'Cancelled by member' } = req.body;
-  const isObjectId = mongoose.Types.ObjectId.isValid(id);
 
-  const booking = await Booking.findOne(
-    isObjectId ? { $or: [{ _id: id }, { bookingId: id }] } : { bookingId: id }
-  );
+  const booking = await Booking.findOne(buildBookingLookupQuery(id, req.user?._id));
 
   if (!booking) {
     throw ApiError.notFound('Booking not found.');
@@ -988,6 +989,15 @@ export const cancelBooking = asyncHandler(async (req, res) => {
     };
 
     await booking.save();
+
+    if (quote.refundAmount > 0) {
+      await refundPaymentForReference({
+        referenceId: booking._id,
+        amountPaise: Math.round(Number(quote.refundAmount) * 100),
+        reason: booking.cancellation.reason || 'Pre-start booking cancellation',
+        initiatedBy: String(req.user?._id || 'USER'),
+      }).catch((err) => console.warn('Razorpay booking refund warning:', err.message));
+    }
 
     // Synchronize section enrolledCount strictly from real active bookings
     if (booking.sectionId) {
@@ -1079,6 +1089,16 @@ export const reviewBookingCancellation = asyncHandler(async (req, res) => {
 
     await booking.save();
 
+    // Trigger automated Razorpay refund if paid via Razorpay
+    if (booking.cancellation.refundAmount > 0) {
+      await refundPaymentForReference({
+        referenceId: booking._id,
+        amountPaise: Math.round(Number(booking.cancellation.refundAmount) * 100),
+        reason: booking.cancellation.reason || 'Booking cancellation approved',
+        initiatedBy: String(req.user?._id || 'GYM_OWNER'),
+      }).catch((err) => console.warn('Razorpay booking refund warning:', err.message));
+    }
+
     // Synchronize section capacity from real active bookings
     if (booking.sectionId) {
       const remainingCount = await Booking.countDocuments({
@@ -1163,10 +1183,7 @@ export const requestReschedule = asyncHandler(async (req, res) => {
   const { sessionIndex, sessionDate, requestedDate, reason } = req.body;
   const resolvedUser = await resolveUserId(req);
 
-  const isObjectId = mongoose.Types.ObjectId.isValid(id);
-  const booking = await Booking.findOne(
-    isObjectId ? { $or: [{ _id: id }, { bookingId: id }] } : { bookingId: id }
-  );
+  const booking = await Booking.findOne(buildBookingLookupQuery(id, resolvedUser));
 
   if (!booking) {
     throw ApiError.notFound('Booking not found.');
@@ -1276,10 +1293,7 @@ export const reviewReschedule = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { sessionIndex, sessionDate, action, proposedDate, ownerNotes } = req.body;
 
-  const isObjectId = mongoose.Types.ObjectId.isValid(id);
-  const booking = await Booking.findOne(
-    isObjectId ? { $or: [{ _id: id }, { bookingId: id }] } : { bookingId: id }
-  );
+  const booking = await Booking.findOne(buildBookingLookupQuery(id, resolvedUser));
 
   if (!booking) {
     throw ApiError.notFound('Booking not found.');
@@ -1379,10 +1393,7 @@ export const respondRescheduleProposal = asyncHandler(async (req, res) => {
   const { sessionIndex, sessionDate, decision } = req.body;
   const resolvedUser = await resolveUserId(req);
 
-  const isObjectId = mongoose.Types.ObjectId.isValid(id);
-  const booking = await Booking.findOne(
-    isObjectId ? { $or: [{ _id: id }, { bookingId: id }] } : { bookingId: id }
-  );
+  const booking = await Booking.findOne(buildBookingLookupQuery(id, resolvedUser));
 
   if (!booking) {
     throw ApiError.notFound('Booking not found.');

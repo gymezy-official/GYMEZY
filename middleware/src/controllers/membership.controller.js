@@ -18,6 +18,7 @@ import { ApiResponse } from '../utils/apiResponse.js';
 import { getSearchTerm, escapeRegex } from '../utils/searchHelper.js';
 import { findOrCreateWalkInCustomer } from '../utils/walkInHelper.js';
 import { sanitizeDocument } from '../utils/responseTransformer.js';
+import { refundPaymentForReference } from '../services/razorpay.service.js';
 
 const TIER_DURATION_DAYS = {
   Monthly: 30,
@@ -1020,6 +1021,15 @@ export const cancelMembership = async (req, res, next) => {
         });
       }
 
+      if (isUpcoming && totalPaid > 0) {
+        await refundPaymentForReference({
+          referenceId: membership._id,
+          amountPaise: Math.round(Number(totalPaid) * 100),
+          reason: reason || 'Pre-activation membership cancellation',
+          initiatedBy: String(req.user?._id || 'SYSTEM'),
+        }).catch((err) => console.warn('Razorpay pre-activation membership refund warning:', err.message));
+      }
+
       const populated = await Membership.findById(membership._id)
         .populate('userId', 'fullName name email phone avatar customerId')
         .populate('trainerId', 'name specialty avatar')
@@ -1050,11 +1060,11 @@ export const requestCancellationNegotiation = async (req, res, next) => {
   try {
     const { id } = req.params;
     const reason = String(req.body?.reason || 'Cancelled by member').trim();
-    const membership = await Membership.findOne(
-      mongoose.Types.ObjectId.isValid(id)
-        ? { $or: [{ _id: id }, { membershipId: id }] }
-        : { membershipId: id }
-    );
+    const isObjId = mongoose.Types.ObjectId.isValid(id);
+    const membershipQuery = isObjId
+      ? { _id: id }
+      : { membershipId: id, ...(req.user?._id ? { userId: req.user._id } : {}) };
+    const membership = await Membership.findOne(membershipQuery);
     if (!membership) throw ApiError.notFound('Membership not found.');
     if (membership.status === 'Cancelled') {
       throw ApiError.badRequest('Membership is already cancelled.');
@@ -1153,6 +1163,15 @@ export const requestCancellationNegotiation = async (req, res, next) => {
         completedAt: now,
       });
 
+      if (totalPaid > 0) {
+        await refundPaymentForReference({
+          referenceId: membership._id,
+          amountPaise: Math.round(Number(totalPaid) * 100),
+          reason: reason || 'Pre-activation membership cancellation',
+          initiatedBy: String(req.user?._id || 'USER'),
+        }).catch((err) => console.warn('Razorpay pre-activation membership refund warning:', err.message));
+      }
+
       return res.status(200).json(
         ApiResponse.success(
           negotiation,
@@ -1194,29 +1213,32 @@ export const getMyCancellationNegotiations = async (req, res, next) => {
       req.query.user;
     const rawMembershipId = req.query.membershipId;
 
-    let filter = null;
+    const userFilter =
+      userId && mongoose.Types.ObjectId.isValid(userId)
+        ? { userId: new mongoose.Types.ObjectId(userId) }
+        : userId
+        ? { userId }
+        : null;
 
-    if (userId && mongoose.Types.ObjectId.isValid(userId)) {
-      filter = { userId: new mongoose.Types.ObjectId(userId) };
-    } else if (userId) {
-      filter = { userId };
-    }
+    let filter = userFilter;
 
     if (rawMembershipId) {
       let resolvedMemId = null;
       if (mongoose.Types.ObjectId.isValid(rawMembershipId)) {
         resolvedMemId = new mongoose.Types.ObjectId(rawMembershipId);
       } else {
-        const memDoc = await Membership.findOne({ membershipId: rawMembershipId }).select('_id').lean();
+        const memQuery = { membershipId: rawMembershipId };
+        if (userFilter?.userId) memQuery.userId = userFilter.userId;
+        const memDoc = await Membership.findOne(memQuery).select('_id').lean();
         if (memDoc) resolvedMemId = memDoc._id;
       }
 
       if (resolvedMemId) {
-        if (filter) {
-          filter = { $or: [filter, { membershipId: resolvedMemId }] };
-        } else {
-          filter = { membershipId: resolvedMemId };
-        }
+        filter = filter
+          ? { ...filter, membershipId: resolvedMemId }
+          : { membershipId: resolvedMemId };
+      } else if (!filter) {
+        return res.status(200).json(ApiResponse.success([], 'Cancellation negotiations retrieved.'));
       }
     }
 
@@ -1349,6 +1371,14 @@ export const gymAcceptCancellation = async (req, res, next) => {
       { _id: negotiation.membershipId },
       { $set: { status: 'Cancelled', cancellation: { cancelledAt: new Date(), reason: negotiation.reason } } }
     );
+    if (refundAmount > 0) {
+      await refundPaymentForReference({
+        referenceId: negotiation.membershipId,
+        amountPaise: Math.round(Number(refundAmount) * 100),
+        reason: negotiation.reason || 'Membership cancellation approved',
+        initiatedBy: String(req.user?._id || 'GYM_OWNER'),
+      }).catch((err) => console.warn('Razorpay membership refund warning:', err.message));
+    }
     return res.status(200).json(ApiResponse.success(negotiation, 'Cancellation accepted and refund approved.'));
   } catch (error) {
     next(error);
@@ -1396,6 +1426,14 @@ export const memberRespondCancellationOffer = async (req, res, next) => {
         { _id: negotiation.membershipId },
         { $set: { status: 'Cancelled', cancellation: { cancelledAt: new Date(), reason: negotiation.reason } } }
       );
+      if (negotiation.approvedRefundAmount > 0) {
+        await refundPaymentForReference({
+          referenceId: negotiation.membershipId,
+          amountPaise: Math.round(Number(negotiation.approvedRefundAmount) * 100),
+          reason: negotiation.reason || 'Member accepted cancellation refund offer',
+          initiatedBy: String(req.user?._id || 'USER'),
+        }).catch((err) => console.warn('Razorpay accepted-offer membership refund warning:', err.message));
+      }
     } else {
       negotiation.status = 'PENDING_GYM_APPROVAL';
     }
@@ -1409,7 +1447,7 @@ export const memberRespondCancellationOffer = async (req, res, next) => {
 /**
  * Helper to resolve target plan details from gym
  */
-const resolveTargetPlanDetails = (gym, targetTier, targetPlanId) => {
+export const resolveTargetPlanDetails = (gym, targetTier, targetPlanId) => {
   const tierClean = String(targetTier || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
   if (Array.isArray(gym?.customPricingPlans) && gym.customPricingPlans.length > 0) {
