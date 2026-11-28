@@ -423,10 +423,11 @@ const gymSchema = new mongoose.Schema(
     // Subscription & Settlement
     subscriptionType: {
       type: String,
-      enum: ['Hybrid', 'App Only', 'GMS', 'Listing Only'],
+      enum: ['Hybrid', 'App Only', 'GMS', 'Listing Only', 'Custom'],
       default: 'Hybrid',
       index: true,
     },
+    subscriptionPrice: { type: Number, default: null, min: 0 },
     subscriptionStatus: {
       type: String,
       enum: ['Active', 'Inactive', 'Trial', 'Expired'],
@@ -470,7 +471,10 @@ const gymSchema = new mongoose.Schema(
     },
     changesCount: { type: Number, default: 0, min: 0 },
     rejectionReason: { type: String, trim: true, default: '' },
+    rejectionNote: { type: String, trim: true, default: '' },
     remark: { type: String, trim: true, default: '' },
+    resubmissionNote: { type: String, trim: true, default: '' },
+    resubmittedAt: { type: Date, default: null },
     rating: { type: Number, default: 4.9, min: 0, max: 5 },
     reviewsCount: { type: Number, default: 0, min: 0 },
     ratings: { type: [reviewSchema], default: [] },

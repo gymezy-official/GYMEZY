@@ -21,6 +21,8 @@ import {
   Spin,
   Empty,
   DatePicker,
+  Segmented,
+  Alert,
 } from 'antd';
 import {
   PlusOutlined,
@@ -77,6 +79,18 @@ export const TIME_SLOTS = [
   '11:00 PM',
 ];
 
+const parseTimeToMinutes = (timeStr) => {
+  if (!timeStr) return -1;
+  const match = String(timeStr).trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!match) return -1;
+  let hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const period = match[3].toUpperCase();
+  if (period === 'PM' && hours !== 12) hours += 12;
+  if (period === 'AM' && hours === 12) hours = 0;
+  return hours * 60 + minutes;
+};
+
 export const DAYS_OPTIONS = [
   { label: 'Mon', value: 'Mon' },
   { label: 'Tue', value: 'Tue' },
@@ -98,6 +112,7 @@ export const SectionsManagement = () => {
 
   // Filters
   const [activeCategory, setActiveCategory] = useState('all');
+  const [lifecycleFilter, setLifecycleFilter] = useState('active'); // 'active' (Upcoming/Ongoing), 'completed', 'all'
   const [searchQuery, setSearchQuery] = useState('');
   const debouncedSearchQuery = useDebounce(searchQuery, 350);
 
@@ -135,10 +150,18 @@ export const SectionsManagement = () => {
     }
   };
 
-  // Dynamic Watch for Estimated End Date calculation
+  // Dynamic Watch for Estimated End Date calculation & Trainer Availability
   const watchedStartDate = Form.useWatch('startDate', form);
   const watchedDurationDays = Form.useWatch('durationDays', form);
   const watchedActiveDays = Form.useWatch('activeDays', form);
+  const watchedStartTime = Form.useWatch('startTime', form);
+  const watchedEndTime = Form.useWatch('endTime', form);
+  const watchedTrainerId = Form.useWatch('trainerId', form);
+
+  // Available Trainers for the current schedule
+  const [availableTrainers, setAvailableTrainers] = useState([]);
+  const [allEvaluatedTrainers, setAllEvaluatedTrainers] = useState([]);
+  const [isLoadingAvailableTrainers, setIsLoadingAvailableTrainers] = useState(false);
 
   // Calculates exact completion date by counting occurrences of active weekly days
   const calculateScheduleEndDate = useCallback((startDateInput, durationDaysInput, activeDaysInput) => {
@@ -171,6 +194,29 @@ export const SectionsManagement = () => {
     }
     return current;
   }, []);
+
+  // Single Source of Truth Lifecycle Calculator for Section Batches
+  const getSectionLifecycleState = useCallback((record) => {
+    if (record.lifecycleStatus) return record.lifecycleStatus;
+    const now = new Date();
+    const sDate = record.startDate ? new Date(record.startDate) : new Date();
+    let effectiveEnd = record.endDate;
+    if (!effectiveEnd && record.startDate && record.durationDays) {
+      effectiveEnd = calculateScheduleEndDate(record.startDate, record.durationDays, record.activeDays);
+    }
+    const eDate = effectiveEnd ? new Date(effectiveEnd) : sDate;
+    eDate.setHours(23, 59, 59, 999);
+    if (now > eDate) return 'COMPLETED';
+    if (record.isActive === false) return 'PAUSED';
+    if (now >= sDate) return 'ONGOING';
+    return 'UPCOMING';
+  }, [calculateScheduleEndDate]);
+
+  // Lifecycle counts for tabs
+  const upcomingCount = sections.filter((s) => getSectionLifecycleState(s) === 'UPCOMING').length;
+  const ongoingCount = sections.filter((s) => getSectionLifecycleState(s) === 'ONGOING').length;
+  const activeCount = upcomingCount + ongoingCount;
+  const completedCount = sections.filter((s) => getSectionLifecycleState(s) === 'COMPLETED').length;
 
   const estimatedEndDate = React.useMemo(() => {
     const rawStart = watchedStartDate || form.getFieldValue('startDate');
@@ -232,33 +278,128 @@ export const SectionsManagement = () => {
     fetchTrainers();
   }, [fetchSections, fetchTrainers]);
 
-  // Trainer Select Options
+  // Dynamic Available Trainers Fetcher for Selected Schedule
+  useEffect(() => {
+    if (!isModalOpen) return;
+
+    let isMounted = true;
+    const fetchAvailable = async () => {
+      setIsLoadingAvailableTrainers(true);
+      try {
+        const params = {
+          startDate: watchedStartDate || undefined,
+          durationDays: watchedDurationDays || 20,
+          activeDays: watchedActiveDays ? (Array.isArray(watchedActiveDays) ? watchedActiveDays.join(',') : watchedActiveDays) : undefined,
+          startTime: watchedStartTime || undefined,
+          endTime: watchedEndTime || undefined,
+          excludeSectionId: editingSection?._id || undefined,
+        };
+        const res = await apiClient.get('/sections/available-trainers', { params });
+        if (isMounted && res.data?.success) {
+          const avail = res.data.data?.availableTrainers || [];
+          const allEv = res.data.data?.allTrainers || [];
+          setAvailableTrainers(avail);
+          setAllEvaluatedTrainers(allEv);
+
+          // If current trainer is no longer available, select first available or clear
+          const currentTid = form.getFieldValue('trainerId');
+          const stillAvail = avail.some((t) => String(t._id || t.id) === String(currentTid));
+          if (!stillAvail) {
+            form.setFieldsValue({
+              trainerId: avail.length > 0 ? String(avail[0]._id || avail[0].id) : null,
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch available trainers:', err);
+      } finally {
+        if (isMounted) setIsLoadingAvailableTrainers(false);
+      }
+    };
+
+    fetchAvailable();
+    return () => {
+      isMounted = false;
+    };
+  }, [
+    isModalOpen,
+    watchedStartDate,
+    watchedDurationDays,
+    watchedActiveDays,
+    watchedStartTime,
+    watchedEndTime,
+    editingSection,
+    form,
+  ]);
+
+  // Trainer Select Options (Showing all trainers with live availability status badges)
+  // Trainer Select Options (Showing all trainers: available selectable, unavailable labeled Not Available & disabled)
   const trainerOptions = React.useMemo(() => {
-    return trainers.map((t) => ({
-      value: String(t._id || t.id),
-      label: (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Avatar
-            size="small"
-            src={hasValidProfilePic(t.avatar) ? t.avatar : undefined}
-            icon={<UserOutlined style={{ fontSize: 13 }} />}
+    const list = allEvaluatedTrainers.length > 0 ? allEvaluatedTrainers : trainers;
+    return list.map((t) => {
+      const isAvail = t.isAvailable !== false;
+      return {
+        value: String(t._id || t.id),
+        disabled: !isAvail,
+        label: (
+          <div
             style={{
-              backgroundColor: isDarkMode ? '#1e1b4b' : '#ede9fe',
-              color: '#6366f1',
-              flexShrink: 0,
-              display: 'inline-flex',
+              display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
+              justifyContent: 'space-between',
+              width: '100%',
+              gap: 8,
+              opacity: isAvail ? 1 : 0.65,
+              opacity: isAvail ? 1 : 0.5,
             }}
-          />
-          <span style={{ fontWeight: 600 }}>{t.name}</span>
-          {t.employeeId ? (
-            <span style={{ color: '#94a3b8', fontSize: 12 }}>({t.employeeId})</span>
-          ) : null}
-        </div>
-      ),
-    }));
-  }, [trainers]);
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
+              <Avatar
+                size="small"
+                src={hasValidProfilePic(t.avatar) ? t.avatar : undefined}
+                icon={<UserOutlined style={{ fontSize: 13 }} />}
+                style={{
+                  backgroundColor: isDarkMode ? '#1e1b4b' : '#ede9fe',
+                  color: '#6366f1',
+                  flexShrink: 0,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              />
+              <span style={{ fontWeight: 600 }}>{t.name}</span>
+              <span style={{ color: '#94a3b8', fontSize: 12 }}>
+                ({t.specialty || t.role || 'Coach'}{t.employeeId ? ` • ${t.employeeId}` : ''})
+              </span>
+            </div>
+            {!isAvail ? (
+              <Tag color="error" style={{ fontSize: 11, borderRadius: 10, margin: 0, whiteSpace: 'nowrap' }}>
+                {t.reason || 'Unavailable'}
+              </Tag>
+            ) : (
+              <Tag color="success" style={{ fontSize: 11, borderRadius: 10, margin: 0 }}>
+                Available
+              </Tag>
+            )}
+            <Tag
+              color={isAvail ? 'success' : 'default'}
+              style={{
+                fontSize: 11,
+                borderRadius: 10,
+                margin: 0,
+                fontWeight: 500,
+                color: isAvail ? undefined : '#64748b',
+                background: isAvail ? undefined : (isDarkMode ? '#334155' : '#f1f5f9'),
+                borderColor: 'transparent',
+              }}
+            >
+              {isAvail ? 'Available' : 'Not Available'}
+            </Tag>
+          </div>
+        ),
+      };
+    });
+  }, [allEvaluatedTrainers, trainers, isDarkMode]);
 
   // Open Create/Edit Modal
   const handleOpenModal = (section = null) => {
@@ -286,13 +427,10 @@ export const SectionsManagement = () => {
         });
       } else {
         form.resetFields();
-        const defaultTrainerId = trainers[0]?._id
-          ? String(trainers[0]._id)
-          : (trainers[0]?.id ? String(trainers[0].id) : undefined);
         form.setFieldsValue({
           title: '',
           category: 'yoga',
-          trainerId: defaultTrainerId,
+          trainerId: undefined,
           cost: 1500,
           startDate: new Date().toISOString().split('T')[0],
           durationDays: 20,
@@ -366,6 +504,11 @@ export const SectionsManagement = () => {
 
   // Toggle Section Status
   const handleToggleStatus = async (id, currentStatus) => {
+    const target = sections.find((s) => s._id === id);
+    if (target && getSectionLifecycleState(target) === 'COMPLETED' && !currentStatus) {
+      message.warning('This batch schedule has already ended. Edit the schedule dates to reopen it.');
+      return;
+    }
     try {
       const response = await apiClient.patch(`/sections/${id}/status`, {
         isActive: !currentStatus,
@@ -397,6 +540,10 @@ export const SectionsManagement = () => {
   // Filtered Sections
   const filteredSections = React.useMemo(() => {
     return sections.filter((sec) => {
+      const state = getSectionLifecycleState(sec);
+      if (lifecycleFilter === 'active' && state !== 'UPCOMING' && state !== 'ONGOING') return false;
+      if (lifecycleFilter === 'completed' && state !== 'COMPLETED') return false;
+
       const matchesCategory = activeCategory === 'all' || sec.category === activeCategory;
       const trainerName =
         (typeof sec.trainerId === 'object' ? sec.trainerId?.name : '') || '';
@@ -408,7 +555,7 @@ export const SectionsManagement = () => {
         (sec.category || '').toLowerCase().includes(q);
       return matchesCategory && matchesSearch;
     });
-  }, [sections, activeCategory, debouncedSearchQuery]);
+  }, [sections, lifecycleFilter, activeCategory, debouncedSearchQuery, getSectionLifecycleState]);
 
   // Category Color Helper
   const getCategoryColor = (catKey) => {
@@ -604,16 +751,48 @@ export const SectionsManagement = () => {
     },
     {
       title: 'Status',
-      dataIndex: 'isActive',
-      key: 'isActive',
-      width: 100,
-      render: (isActive, record) => (
-        <Switch
-          checked={isActive}
-          onChange={() => handleToggleStatus(record._id, isActive)}
-          size="small"
-        />
-      ),
+      key: 'lifecycleStatus',
+      width: 130,
+      render: (_, record) => {
+        const state = getSectionLifecycleState(record);
+        const isCompleted = state === 'COMPLETED';
+        const badgeColors = {
+          UPCOMING: '#0284c7',
+          ONGOING: '#ea580c',
+          COMPLETED: '#64748b',
+          PAUSED: '#ef4444',
+        };
+        const badgeLabels = {
+          UPCOMING: 'Upcoming',
+          ONGOING: 'Ongoing',
+          COMPLETED: 'Completed',
+          PAUSED: 'Paused',
+        };
+        return (
+          <Space direction="vertical" size={4} style={{ display: 'inline-flex', alignItems: 'flex-start' }}>
+            <Tag
+              color={badgeColors[state] || '#64748b'}
+              style={{
+                borderRadius: 12,
+                fontWeight: 600,
+                fontSize: 11,
+                padding: '1px 8px',
+                border: 'none',
+                margin: 0,
+              }}
+            >
+              {badgeLabels[state] || state}
+            </Tag>
+            {!isCompleted && (
+              <Switch
+                checked={record.isActive}
+                onChange={() => handleToggleStatus(record._id, record.isActive)}
+                size="small"
+              />
+            )}
+          </Space>
+        );
+      },
     },
     {
       title: 'Action',
@@ -667,8 +846,18 @@ export const SectionsManagement = () => {
           marginBottom: 20,
         }}
       >
-        {/* Category Dropdown & Search Filter */}
+        {/* Lifecycle Tabs, Category Dropdown & Search Filter */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <Segmented
+            value={lifecycleFilter}
+            onChange={setLifecycleFilter}
+            options={[
+              { label: `Active (${activeCount})`, value: 'active' },
+              { label: `Completed (${completedCount})`, value: 'completed' },
+              { label: `All (${sections.length})`, value: 'all' },
+            ]}
+          />
+
           <Select
             value={activeCategory}
             onChange={(val) => setActiveCategory(val)}
@@ -839,13 +1028,16 @@ export const SectionsManagement = () => {
         }
         open={isModalOpen}
         onCancel={() => setIsModalOpen(false)}
-        width={700}
+        width={1040}
+        centered
+        style={{ maxWidth: '95vw' }}
         footer={null}
         destroyOnClose
       >
-        <Form form={form} layout="vertical" onFinish={handleSaveSection} style={{ marginTop: 16 }}>
-          <Row gutter={16}>
-            <Col span={14}>
+        <Form form={form} layout="vertical" onFinish={handleSaveSection} style={{ marginTop: 12 }}>
+          {/* Row 1: Title, Category, Cost, Capacity */}
+          <Row gutter={14}>
+            <Col xs={24} md={8}>
               <Form.Item
                 name="title"
                 label="Section Name / Title"
@@ -859,7 +1051,7 @@ export const SectionsManagement = () => {
               </Form.Item>
             </Col>
 
-            <Col span={10}>
+            <Col xs={24} md={6}>
               <Form.Item
                 name="category"
                 label="Category"
@@ -877,25 +1069,8 @@ export const SectionsManagement = () => {
                 </Select>
               </Form.Item>
             </Col>
-          </Row>
 
-          <Row gutter={16}>
-            <Col span={14}>
-              <Form.Item
-                name="trainerId"
-                label="Assigned Gym Trainer (Available in Gym)"
-                rules={[{ required: true, message: 'Please select a trainer' }]}
-              >
-                <Select
-                  size="large"
-                  placeholder="Select a gym trainer"
-                  style={{ borderRadius: 'var(--radius-base)' }}
-                  options={trainerOptions}
-                />
-              </Form.Item>
-            </Col>
-
-            <Col span={10}>
+            <Col xs={12} md={5}>
               <Form.Item
                 name="cost"
                 label="Cost / Program Fee (₹)"
@@ -910,59 +1085,8 @@ export const SectionsManagement = () => {
                 />
               </Form.Item>
             </Col>
-          </Row>
 
-          <Row gutter={16}>
-            <Col span={6}>
-              <Form.Item
-                name="startDate"
-                label="Starting Date"
-                rules={[{ required: true, message: 'Select start date' }]}
-              >
-                <Input
-                  type="date"
-                  size="large"
-                  style={{ borderRadius: 'var(--radius-base)' }}
-                />
-              </Form.Item>
-            </Col>
-
-            <Col span={6}>
-              <Form.Item
-                name="durationDays"
-                label="Duration (Days)"
-                rules={[{ required: true, message: 'Enter days' }]}
-              >
-                <InputNumber
-                  size="large"
-                  min={1}
-                  max={365}
-                  placeholder="20"
-                  addonAfter="Days"
-                  style={{ width: '100%', borderRadius: 'var(--radius-base)' }}
-                />
-              </Form.Item>
-            </Col>
-
-            <Col span={6}>
-              <Form.Item label="Estimated End Date">
-                <Input
-                  size="large"
-                  readOnly
-                  value={estimatedEndDate}
-                  prefix={<CalendarOutlined style={{ color: '#003882' }} />}
-                  style={{
-                    borderRadius: 'var(--radius-base)',
-                    backgroundColor: isDarkMode ? '#161b22' : '#f8fafc',
-                    color: isDarkMode ? '#58a6ff' : '#003882',
-                    fontWeight: 700,
-                    cursor: 'default',
-                  }}
-                />
-              </Form.Item>
-            </Col>
-
-            <Col span={6}>
+            <Col xs={12} md={5}>
               <Form.Item
                 name="maxCapacity"
                 label="Capacity"
@@ -980,15 +1104,54 @@ export const SectionsManagement = () => {
             </Col>
           </Row>
 
-          <Row gutter={16}>
-            <Col span={12}>
+          {/* Row 2: Trainer, Daily Start Time, Daily End Time */}
+          <Row gutter={14}>
+            <Col xs={24} md={12}>
+              <Form.Item
+                name="trainerId"
+                label="Assigned Gym Trainer (Available in Gym)"
+                rules={[{ required: true, message: 'Please select an available trainer' }]}
+                validateStatus={!isLoadingAvailableTrainers && availableTrainers.length === 0 ? 'error' : undefined}
+              >
+                <Select
+                  size="large"
+                  placeholder={
+                    isLoadingAvailableTrainers
+                      ? 'Evaluating available trainers...'
+                      : availableTrainers.length === 0
+                      ? 'No trainers available for this schedule'
+                      : 'Select an available trainer'
+                  }
+                  loading={isLoadingAvailableTrainers}
+                  style={{ borderRadius: 'var(--radius-base)' }}
+                  options={trainerOptions}
+                />
+              </Form.Item>
+            </Col>
+
+            <Col xs={12} md={6}>
               <Form.Item
                 name="startTime"
                 label="Daily Start Time"
                 rules={[{ required: true, message: 'Select start time' }]}
               >
-                <Select size="large" style={{ borderRadius: 'var(--radius-base)' }}>
-                  {TIME_SLOTS.map((slot) => (
+                <Select
+                  size="large"
+                  style={{ borderRadius: 'var(--radius-base)' }}
+                  onChange={(newStart) => {
+                    const startMins = parseTimeToMinutes(newStart);
+                    const endMins = parseTimeToMinutes(form.getFieldValue('endTime'));
+                    if (startMins >= 0 && (endMins < 0 || endMins <= startMins)) {
+                      const nextSlot =
+                        TIME_SLOTS.find((s) => parseTimeToMinutes(s) >= startMins + 60) ||
+                        TIME_SLOTS.find((s) => parseTimeToMinutes(s) > startMins);
+                      if (nextSlot) {
+                        form.setFieldValue('endTime', nextSlot);
+                      }
+                    }
+                  }}
+                >
+                  {TIME_SLOTS.slice(0, -1).map((slot) => (
                     <Option key={slot} value={slot}>
                       {slot}
                     </Option>
@@ -997,14 +1160,30 @@ export const SectionsManagement = () => {
               </Form.Item>
             </Col>
 
-            <Col span={12}>
+            <Col xs={12} md={6}>
               <Form.Item
                 name="endTime"
                 label="Daily End Time"
-                rules={[{ required: true, message: 'Select end time' }]}
+                dependencies={['startTime']}
+                rules={[
+                  { required: true, message: 'Select end time' },
+                  ({ getFieldValue }) => ({
+                    validator(_, value) {
+                      const startMins = parseTimeToMinutes(getFieldValue('startTime'));
+                      const endMins = parseTimeToMinutes(value);
+                      if (!value || startMins < 0 || endMins > startMins) {
+                        return Promise.resolve();
+                      }
+                      return Promise.reject(new Error('End time must be after start time'));
+                    },
+                  }),
+                ]}
               >
                 <Select size="large" style={{ borderRadius: 'var(--radius-base)' }}>
-                  {TIME_SLOTS.map((slot) => (
+                  {TIME_SLOTS.filter((slot) => {
+                    const startMins = parseTimeToMinutes(watchedStartTime);
+                    return startMins < 0 || parseTimeToMinutes(slot) > startMins;
+                  }).map((slot) => (
                     <Option key={slot} value={slot}>
                       {slot}
                     </Option>
@@ -1014,72 +1193,171 @@ export const SectionsManagement = () => {
             </Col>
           </Row>
 
-          {/* Weekly Recurring Days */}
-          <Form.Item
-            name="activeDays"
-            label="Weekly Schedule (Select Active Days)"
-            rules={[{ required: true, message: 'Select at least one day' }]}
-          >
-            <Select
-              mode="multiple"
-              size="large"
-              placeholder="Select recurring days (e.g. Mon, Wed, Fri)"
-              options={DAYS_OPTIONS}
-              style={{ borderRadius: 'var(--radius-base)' }}
-            />
-          </Form.Item>
-
-          {/* Description */}
-          <Form.Item name="description" label="Section Description / Guidelines">
-            <Input.TextArea
-              rows={2}
-              placeholder="e.g. 20-day progressive yoga program covering Asanas, Pranayama and Surya Namaskar."
-              style={{ borderRadius: 'var(--radius-base)' }}
-            />
-          </Form.Item>
-
-          {/* Inclusions */}
-          <Form.Item name="inclusions" label="What's Included (One item per line)">
-            <Input.TextArea
-              rows={3}
-              placeholder="e.g.&#10;Full trainer-guided batch sessions&#10;Dedicated studio mats & equipment&#10;Locker and shower facility access"
-              style={{ borderRadius: 'var(--radius-base)' }}
-            />
-          </Form.Item>
-
-          {/* Guidelines / Notice */}
-          <Form.Item name="instructions" label="Special Guidelines / Notice">
-            <Input.TextArea
-              rows={2}
-              placeholder="e.g. Please arrive 10 minutes before the scheduled time slot."
-              style={{ borderRadius: 'var(--radius-base)' }}
-            />
-          </Form.Item>
-
-          {/* Active Switch */}
-          <Form.Item name="isActive" valuePropName="checked" label="Section Visibility">
-            <Space>
-              <Switch defaultChecked />
-              <Text style={{ fontSize: 13, color: isDarkMode ? '#8b949e' : '#64748b' }}>
-                Active and visible for member enrollment
-              </Text>
-            </Space>
-          </Form.Item>
-
-          {/* Submit Actions */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 24 }}>
-            <Button size="large" onClick={() => setIsModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              type="primary"
-              size="large"
-              htmlType="submit"
-              loading={isSubmitting}
-              style={{ backgroundColor: '#003882', fontWeight: 600 }}
+          {!isLoadingAvailableTrainers && availableTrainers.length === 0 && (
+            <div
+              style={{
+                padding: '10px 12px',
+                marginBottom: 14,
+                borderRadius: 'var(--radius-base)',
+                backgroundColor: isDarkMode ? 'rgba(245, 158, 11, 0.1)' : '#fffbeb',
+                border: `1px solid ${isDarkMode ? 'rgba(245, 158, 11, 0.3)' : '#fde68a'}`,
+                fontSize: 12,
+                lineHeight: 1.5,
+              }}
             >
-              {editingSection ? 'Save Changes' : 'Create & Publish Section'}
-            </Button>
+              <div style={{ fontWeight: 600, color: isDarkMode ? '#fbbf24' : '#b45309', marginBottom: 4 }}>
+                No trainers available — adjust time or active days:
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', color: isDarkMode ? '#cbd5e1' : '#475569' }}>
+                {allEvaluatedTrainers.map((t) => {
+                  const r = String(t.reason || '').trim();
+                  const shortReason = /inactive/i.test(r)
+                    ? 'Inactive'
+                    : r.match(/does not work on\s+([A-Z,\s]+)/i)?.[1]
+                    ? `Off on ${r.match(/does not work on\s+([A-Z,\s]+)/i)[1].trim()}`
+                    : r.match(/working hours\s*\(([^)]+)\)/i)?.[1]
+                    ? `Shift: ${r.match(/working hours\s*\(([^)]+)\)/i)[1].trim()}`
+                    : r || 'Unavailable';
+                  return (
+                    <span key={t._id || t.id}>
+                      <strong>{t.name}</strong>: {shortReason}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Row 3: Starting Date, Duration, Estimated End Date, Weekly Schedule */}
+          <Row gutter={14}>
+            <Col xs={12} md={5}>
+              <Form.Item
+                name="startDate"
+                label="Starting Date"
+                rules={[{ required: true, message: 'Select start date' }]}
+              >
+                <Input
+                  type="date"
+                  size="large"
+                  style={{ borderRadius: 'var(--radius-base)' }}
+                />
+              </Form.Item>
+            </Col>
+
+            <Col xs={12} md={5}>
+              <Form.Item
+                name="durationDays"
+                label="Duration (Days)"
+                rules={[{ required: true, message: 'Enter days' }]}
+              >
+                <InputNumber
+                  size="large"
+                  min={1}
+                  max={365}
+                  placeholder="20"
+                  addonAfter="Days"
+                  style={{ width: '100%', borderRadius: 'var(--radius-base)' }}
+                />
+              </Form.Item>
+            </Col>
+
+            <Col xs={12} md={5}>
+              <Form.Item label="Estimated End Date">
+                <Input
+                  size="large"
+                  readOnly
+                  value={estimatedEndDate}
+                  prefix={<CalendarOutlined style={{ color: '#003882' }} />}
+                  style={{
+                    borderRadius: 'var(--radius-base)',
+                    backgroundColor: isDarkMode ? '#161b22' : '#f8fafc',
+                    color: isDarkMode ? '#58a6ff' : '#003882',
+                    fontWeight: 700,
+                    cursor: 'default',
+                  }}
+                />
+              </Form.Item>
+            </Col>
+
+            <Col xs={24} md={9}>
+              <Form.Item
+                name="activeDays"
+                label="Weekly Schedule (Active Days)"
+                rules={[{ required: true, message: 'Select at least one day' }]}
+              >
+                <Select
+                  mode="multiple"
+                  size="large"
+                  placeholder="Select recurring days (e.g. Mon, Wed, Fri)"
+                  options={DAYS_OPTIONS}
+                  style={{ borderRadius: 'var(--radius-base)' }}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          {/* Row 4: Description, Inclusions, Special Guidelines */}
+          <Row gutter={14}>
+            <Col xs={24} md={8}>
+              <Form.Item name="description" label="Section Description / Guidelines">
+                <Input.TextArea
+                  autoSize={{ minRows: 2, maxRows: 12 }}
+                  placeholder="Enter section description"
+                  style={{ borderRadius: 'var(--radius-base)' }}
+                />
+              </Form.Item>
+            </Col>
+
+            <Col xs={24} md={8}>
+              <Form.Item name="inclusions" label="What's Included (One item per line)">
+                <Input.TextArea
+                  autoSize={{ minRows: 2, maxRows: 12 }}
+                  placeholder="Enter included items (one per line)"
+                  style={{ borderRadius: 'var(--radius-base)' }}
+                />
+              </Form.Item>
+            </Col>
+
+            <Col xs={24} md={8}>
+              <Form.Item name="instructions" label="Special Guidelines / Notice">
+                <Input.TextArea
+                  autoSize={{ minRows: 2, maxRows: 12 }}
+                  placeholder="Enter special guidelines"
+                  style={{ borderRadius: 'var(--radius-base)' }}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          {/* Footer Bar: Active Switch + Submit Actions */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginTop: 8, paddingTop: 12, borderTop: `1px solid ${isDarkMode ? '#262626' : '#f1f5f9'}` }}>
+            <Form.Item name="isActive" valuePropName="checked" style={{ marginBottom: 0 }}>
+              <Space>
+                <Switch defaultChecked />
+                <Text style={{ fontSize: 13, color: isDarkMode ? '#8b949e' : '#64748b' }}>
+                  Active and visible for member enrollment
+                </Text>
+              </Space>
+            </Form.Item>
+
+            <div style={{ display: 'flex', gap: 12 }}>
+              <Button size="large" onClick={() => setIsModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="primary"
+                size="large"
+                htmlType="submit"
+                loading={isSubmitting}
+                disabled={availableTrainers.length === 0 || !watchedTrainerId}
+                style={{
+                  backgroundColor: availableTrainers.length === 0 || !watchedTrainerId ? undefined : '#003882',
+                  fontWeight: 600,
+                }}
+              >
+                {editingSection ? 'Save Changes' : 'Create & Publish Section'}
+              </Button>
+            </div>
           </div>
         </Form>
       </Modal>

@@ -24,6 +24,7 @@ import { getSafeImageUri } from '../../utils/mediaUtils';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDebounce } from '../../hooks/useDebounce';
 import { AddTempStaffModal } from '../../widgets/AddTempStaffModal';
+import { SkeletonEmployeeCard } from '../../widgets/Skeleton';
 import {
   AddEmployeeModal,
   AVAILABLE_SERVICES,
@@ -75,11 +76,13 @@ export const EmployeesTab = ({ topInset, navigation }) => {
   // Fetch Employees from Middleware (SSOT Server Search & Pagination)
   const fetchEmployees = useCallback(async () => {
     try {
-      const targetGymId = gym?._id || gym?.partnerId;
-      if (!targetGymId) return;
+      const targetGymId = gym?._id || gym?.id || user?.gymId || gym?.partnerId;
+      const targetPartnerId = gym?.partnerId || user?.partnerId;
+      if (!targetGymId && !targetPartnerId) return;
 
       const params = {
         gymId: targetGymId,
+        gymPartnerId: targetPartnerId,
         page,
         limit: 10,
       };
@@ -108,11 +111,12 @@ export const EmployeesTab = ({ topInset, navigation }) => {
       }
     } catch (err) {
       console.warn('Employees fetch warning:', err.message);
+      showToast({ message: err.message || 'Failed to load employees', isError: true });
     } finally {
       setIsLoading(false);
       setRefreshing(false);
     }
-  }, [gym?._id, gym?.partnerId, debouncedSearch, activeTab, page]);
+  }, [gym?._id, gym?.id, gym?.partnerId, user?.gymId, user?.partnerId, debouncedSearch, activeTab, page]);
 
   useEffect(() => {
     fetchEmployees();
@@ -132,12 +136,9 @@ export const EmployeesTab = ({ topInset, navigation }) => {
     }).length;
   }, [metrics, employees]);
 
-  const staffCount = useMemo(() => {
-    if (metrics?.staffCount !== undefined) return metrics.staffCount;
-    return employees.filter((e) => {
-      const roleStr = (e.role || '').toLowerCase();
-      return !roleStr.includes('trainer') && !roleStr.includes('coach');
-    }).length;
+  const managersCount = useMemo(() => {
+    if (metrics?.managersCount !== undefined) return metrics.managersCount;
+    return employees.filter((e) => (e.role || '').toLowerCase().includes('manager')).length;
   }, [metrics, employees]);
 
   const pendingCount = useMemo(() => {
@@ -286,114 +287,39 @@ export const EmployeesTab = ({ topInset, navigation }) => {
           />
         }
       >
-        {/* 2. Key Metrics Row */}
+        {/* 2. Minimal Key Metrics Strip */}
         <View style={styles.metricsRow}>
-          <View
-            style={[
-              styles.metricCard,
-              {
-                backgroundColor: isDark ? AppColors.darkCard : '#FFFFFF',
-                borderColor: isDark ? AppColors.darkBorder : '#E2E8F0',
-              },
-            ]}
-          >
-            <View style={[styles.metricIconWrap, { backgroundColor: 'rgba(0, 102, 204, 0.12)' }]}>
-              <MaterialIcons name="badge" size={18} color={AppColors.primaryColor} />
+          {[
+            { label: 'Total Staff', value: metrics?.totalEmployees ?? totalCount ?? employees.length, icon: 'badge', color: AppColors.primaryColor },
+            { label: 'Trainers', value: trainersCount, icon: 'fitness-center', color: AppColors.successGreen },
+            { label: 'Managers', value: managersCount, icon: 'manage-accounts', color: '#A855F7' },
+            { label: 'Pending', value: pendingCount, icon: 'hourglass-empty', color: AppColors.warningAmber },
+          ].map((m) => (
+            <View
+              key={m.label}
+              style={[
+                styles.metricCard,
+                {
+                  backgroundColor: isDark ? AppColors.darkCard : '#FFFFFF',
+                  borderColor: isDark ? AppColors.darkBorder : '#E2E8F0',
+                },
+              ]}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <MaterialIcons name={m.icon} size={14} color={m.color} />
+                <Text style={[styles.metricNumber, { color: isDark ? '#FFFFFF' : '#0F172A' }]}>
+                  {m.value}
+                </Text>
+              </View>
+              <Text
+                style={[styles.metricLabel, { color: isDark ? 'rgba(255,255,255,0.55)' : '#64748B' }]}
+                numberOfLines={1}
+              >
+                {m.label}
+              </Text>
             </View>
-            <Text style={[styles.metricNumber, { color: isDark ? '#FFFFFF' : '#0F172A' }]}>
-              {employees.length}
-            </Text>
-            <Text style={[styles.metricLabel, { color: isDark ? 'rgba(255,255,255,0.5)' : '#64748B' }]}>
-              Total Staff
-            </Text>
-          </View>
-
-          <View
-            style={[
-              styles.metricCard,
-              {
-                backgroundColor: isDark ? AppColors.darkCard : '#FFFFFF',
-                borderColor: isDark ? AppColors.darkBorder : '#E2E8F0',
-              },
-            ]}
-          >
-            <View style={[styles.metricIconWrap, { backgroundColor: 'rgba(16, 185, 129, 0.12)' }]}>
-              <MaterialIcons name="fitness-center" size={18} color={AppColors.successGreen} />
-            </View>
-            <Text style={[styles.metricNumber, { color: isDark ? '#FFFFFF' : '#0F172A' }]}>
-              {trainersCount}
-            </Text>
-            <Text style={[styles.metricLabel, { color: isDark ? 'rgba(255,255,255,0.5)' : '#64748B' }]}>
-              Trainers
-            </Text>
-          </View>
-
-          <View
-            style={[
-              styles.metricCard,
-              {
-                backgroundColor: isDark ? AppColors.darkCard : '#FFFFFF',
-                borderColor: isDark ? AppColors.darkBorder : '#E2E8F0',
-              },
-            ]}
-          >
-            <View style={[styles.metricIconWrap, { backgroundColor: 'rgba(168, 85, 247, 0.12)' }]}>
-              <MaterialIcons name="support-agent" size={18} color="#A855F7" />
-            </View>
-            <Text style={[styles.metricNumber, { color: isDark ? '#FFFFFF' : '#0F172A' }]}>
-              {staffCount}
-            </Text>
-            <Text style={[styles.metricLabel, { color: isDark ? 'rgba(255,255,255,0.5)' : '#64748B' }]}>
-              Floor Staff
-            </Text>
-          </View>
-
-          <View
-            style={[
-              styles.metricCard,
-              {
-                backgroundColor: isDark ? AppColors.darkCard : '#FFFFFF',
-                borderColor: isDark ? AppColors.darkBorder : '#E2E8F0',
-              },
-            ]}
-          >
-            <View style={[styles.metricIconWrap, { backgroundColor: 'rgba(245, 158, 11, 0.12)' }]}>
-              <MaterialIcons name="hourglass-empty" size={18} color={AppColors.warningAmber} />
-            </View>
-            <Text style={[styles.metricNumber, { color: isDark ? '#FFFFFF' : '#0F172A' }]}>
-              {pendingCount}
-            </Text>
-            <Text style={[styles.metricLabel, { color: isDark ? 'rgba(255,255,255,0.5)' : '#64748B' }]}>
-              Pending
-            </Text>
-          </View>
+          ))}
         </View>
-
-        {/* 3. Quick Attendance Action Card */}
-        <TouchableOpacity
-          style={[
-            styles.attendanceBanner,
-            {
-              backgroundColor: isDark ? AppColors.darkCard : '#FFFFFF',
-              borderColor: isDark ? AppColors.darkBorder : '#E2E8F0',
-            },
-          ]}
-          onPress={() => navigation?.navigate('Attendance')}
-          activeOpacity={0.85}
-        >
-          <View style={styles.attendanceIconCircle}>
-            <MaterialIcons name="how-to-reg" size={22} color="#FFFFFF" />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.attendanceBannerTitle, { color: isDark ? '#FFFFFF' : '#0F172A' }]}>
-              Staff & Trainer Attendance Hub
-            </Text>
-            <Text style={[styles.attendanceBannerSub, { color: isDark ? 'rgba(255,255,255,0.6)' : '#64748B' }]}>
-              Record check-ins, verify shift hours & review today's roster
-            </Text>
-          </View>
-          <MaterialIcons name="arrow-forward-ios" size={16} color={AppColors.primaryColor} />
-        </TouchableOpacity>
 
         {/* 4. Search Bar */}
         <View
@@ -460,11 +386,10 @@ export const EmployeesTab = ({ topInset, navigation }) => {
 
         {/* 6. Employee Cards List */}
         {isLoading ? (
-          <View style={{ paddingVertical: 48, alignItems: 'center' }}>
-            <ActivityIndicator size="large" color={AppColors.primaryColor} />
-            <Text style={{ marginTop: 12, color: isDark ? '#94A3B8' : '#64748B' }}>
-              Loading staff roster...
-            </Text>
+          <View style={{ paddingTop: 8 }}>
+            <SkeletonEmployeeCard />
+            <SkeletonEmployeeCard />
+            <SkeletonEmployeeCard />
           </View>
         ) : filteredEmployees.length === 0 ? (
           <View
@@ -1300,27 +1225,6 @@ export const EmployeesTab = ({ topInset, navigation }) => {
                   </TouchableOpacity>
 
                   <TouchableOpacity
-                    style={[
-                      styles.modalActionBtn,
-                      {
-                        backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#F1F5F9',
-                        borderWidth: 1,
-                        borderColor: isDark ? AppColors.darkBorder : '#E2E8F0',
-                        flex: 1,
-                      },
-                    ]}
-                    onPress={() => {
-                      setShowDetailModal(false);
-                      navigation?.navigate('Attendance');
-                    }}
-                  >
-                    <MaterialIcons name="how-to-reg" size={17} color={isDark ? '#FFFFFF' : '#0F172A'} />
-                    <Text style={[styles.modalActionBtnText, { color: isDark ? '#FFFFFF' : '#0F172A' }]}>
-                      Attendance
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
                     style={[styles.modalActionBtn, { backgroundColor: 'rgba(239, 68, 68, 0.12)', flex: 1 }]}
                     onPress={() => handleDeactivate(selectedEmployee)}
                   >
@@ -1433,57 +1337,25 @@ const styles = StyleSheet.create({
   metricsRow: {
     flexDirection: 'row',
     gap: 8,
-    marginBottom: 14,
+    marginBottom: 10,
   },
   metricCard: {
     flex: 1,
-    padding: 10,
-    borderRadius: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    borderRadius: 12,
     borderWidth: 1,
     alignItems: 'center',
   },
-  metricIconWrap: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 6,
-  },
   metricNumber: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '800',
   },
   metricLabel: {
     fontSize: 10,
     fontWeight: '600',
     marginTop: 2,
-  },
-  attendanceBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 14,
-    borderRadius: 16,
-    borderWidth: 1,
-    marginBottom: 14,
-    gap: 12,
-  },
-  attendanceIconCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: AppColors.primaryColor,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  attendanceBannerTitle: {
-    fontSize: 14.5,
-    fontWeight: '700',
-  },
-  attendanceBannerSub: {
-    fontSize: 11.5,
-    marginTop: 2,
-    lineHeight: 16,
+    textAlign: 'center',
   },
   searchContainer: {
     flexDirection: 'row',

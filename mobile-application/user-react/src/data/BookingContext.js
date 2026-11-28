@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useMemo, useEffect, useCallback } from 'react';
 import { apiService } from '../services/apiService';
 import { membershipService } from '../services/membershipService';
+import { getSafeImageUri, getGymLogoUri, getGymCoverImage } from '../utils/mediaUtils';
 
 const BookingContext = createContext();
 
@@ -44,20 +45,11 @@ export const mapBackendBookingToClient = (b) => {
   }
 
   const resolvedGymLogo =
-    b.gymLogo
-    || (typeof b.gymId?.logo === 'string' && b.gymId.logo.trim())
-    || b.gymId?.logo?.fileData
-    || b.gymId?.logoUrl
-    || b.gymId?.coverPhoto?.fileData
-    || b.gymId?.coverPhotoUrl
-    || b.gymId?.image
-    || (typeof b.gym?.logo === 'string' && b.gym.logo.trim())
-    || b.gym?.logo?.fileData
-    || b.gym?.logoUrl
-    || b.gymImageUrl
-    || b.gymId?.imageUrl
-    || b.gymId?.images?.[0]
-    || null;
+    getSafeImageUri(b.gymLogo) ||
+    getGymLogoUri(b.gymId) ||
+    getGymLogoUri(b.gym) ||
+    getSafeImageUri(b.gymImageUrl) ||
+    null;
 
   return {
     ...b,
@@ -68,7 +60,7 @@ export const mapBackendBookingToClient = (b) => {
     gymName: b.gymId?.name || b.gymName || 'GYMEZY Partner Gym',
     gymLocation: b.gymId?.location || b.gymId?.address?.city || b.gymLocation || '',
     gymLogo: resolvedGymLogo,
-    gymImageUrl: resolvedGymLogo || b.gymId?.imageUrl || b.gymId?.images?.[0] || b.gymImageUrl || '',
+    gymImageUrl: resolvedGymLogo || getGymCoverImage(b.gymId || b.gym),
     type: b.bookingType === 'GROUP_CLASS'
       ? 'Group Class'
       : (b.bookingType === 'SECTION' ? 'Section Batch' : (b.type || 'Gym Access')),
@@ -118,17 +110,17 @@ export const BookingProvider = ({ children }) => {
     refreshBookings();
   }, [refreshBookings]);
 
-  const addBooking = (item) => {
+  const addBooking = useCallback((item) => {
     const normalized = mapBackendBookingToClient(item);
     setBookings((prev) => [normalized, ...prev.filter((b) => b.id !== normalized.id)]);
-  };
+  }, []);
 
-  const updateBooking = (updated) => {
+  const updateBooking = useCallback((updated) => {
     const normalized = mapBackendBookingToClient(updated);
     setBookings((prev) => prev.map((b) => (b.id === normalized.id ? normalized : b)));
-  };
+  }, []);
 
-  const cancelBooking = async (bookingId, reason = 'Cancelled by member') => {
+  const cancelBooking = useCallback(async (bookingId, reason = 'Cancelled by member') => {
     try {
       const updated = await apiService.cancelBooking(bookingId, reason);
       if (updated) {
@@ -140,13 +132,13 @@ export const BookingProvider = ({ children }) => {
       console.warn('[BOOKING CONTEXT] Server cancel booking failed:', err?.message);
       throw err;
     }
-  };
+  }, [updateBooking]);
 
-  const addMembership = (item) => {
+  const addMembership = useCallback((item) => {
     setMemberships((prev) => [item, ...prev]);
-  };
+  }, []);
 
-  const updateMembership = (updated) => {
+  const updateMembership = useCallback((updated) => {
     setMemberships((prev) =>
       prev.map((m) =>
         (updated._id && m._id && String(m._id) === String(updated._id)) ||
@@ -155,9 +147,9 @@ export const BookingProvider = ({ children }) => {
           : m
       )
     );
-  };
+  }, []);
 
-  const cancelMembership = async (membershipId, reason) => {
+  const cancelMembership = useCallback(async (membershipId, reason) => {
     const negotiation = await membershipService.requestCancellationNegotiation(membershipId, reason);
     setMemberships((prev) =>
       prev.map((m) =>
@@ -174,17 +166,17 @@ export const BookingProvider = ({ children }) => {
       )
     );
     return negotiation;
-  };
+  }, []);
 
-  const setAllMemberships = (items) => {
+  const setAllMemberships = useCallback((items) => {
     setMemberships(Array.isArray(items) ? items : []);
-  };
+  }, []);
 
-  const setAllBookings = (items) => {
+  const setAllBookings = useCallback((items) => {
     if (Array.isArray(items)) {
       setBookings(items.map(mapBackendBookingToClient));
     }
-  };
+  }, []);
 
   const contextValue = useMemo(
     () => ({
@@ -201,7 +193,20 @@ export const BookingProvider = ({ children }) => {
       updateMembership,
       cancelMembership,
     }),
-    [bookings, memberships, isLoadingBookings, refreshBookings]
+    [
+      bookings,
+      memberships,
+      isLoadingBookings,
+      refreshBookings,
+      addBooking,
+      updateBooking,
+      cancelBooking,
+      setAllBookings,
+      addMembership,
+      setAllMemberships,
+      updateMembership,
+      cancelMembership,
+    ]
   );
 
   return (

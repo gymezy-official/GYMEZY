@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiService } from '../services/apiService';
 import { biometricService } from '../services/biometricService';
+import { bookmarkService } from '../services/bookmarkService';
 import { isJwtExpired, getJwtRemainingMs } from '../utils/jwtUtils';
 
 const TOKEN_KEY = '@gymezy_user_jwt_token';
@@ -43,8 +44,13 @@ export const AuthProvider = ({ children }) => {
     } catch {
       // Ignore network errors on logout
     } finally {
-      await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY]).catch(() => {});
+      if (typeof AsyncStorage.removeMany === 'function') {
+        await AsyncStorage.removeMany([TOKEN_KEY, USER_KEY]).catch(() => {});
+      } else {
+        await Promise.all([TOKEN_KEY, USER_KEY].map((k) => AsyncStorage.removeItem(k).catch(() => {})));
+      }
       apiService.setAuthToken(null);
+      bookmarkService.clear();
       setUser(null);
       setToken(null);
       setIsGuest(false);
@@ -101,7 +107,11 @@ export const AuthProvider = ({ children }) => {
           // Check if token is expired before restoring
           if (isJwtExpired(storedToken)) {
             console.warn('[AUTH] Stored JWT token is expired. Auto-clearing session.');
-            await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY]).catch(() => {});
+            if (typeof AsyncStorage.removeMany === 'function') {
+              await AsyncStorage.removeMany([TOKEN_KEY, USER_KEY]).catch(() => {});
+            } else {
+              await Promise.all([TOKEN_KEY, USER_KEY].map((k) => AsyncStorage.removeItem(k).catch(() => {})));
+            }
             setToken(null);
             setUser(null);
             setSessionExpiredMessage('Your previous session has expired. Please log in again.');
@@ -122,6 +132,7 @@ export const AuthProvider = ({ children }) => {
                 if (freshUser) {
                   setUser(freshUser);
                   AsyncStorage.setItem(USER_KEY, JSON.stringify(freshUser)).catch(() => {});
+                  bookmarkService.syncGuestBookmarks().catch(() => {});
                 }
               })
               .catch((err) => {
@@ -187,6 +198,9 @@ export const AuthProvider = ({ children }) => {
         await AsyncStorage.removeItem(REMEMBER_KEY).catch(() => {});
         setSavedIdentifier('');
       }
+
+      // Sync guest bookmarks to user MongoDB account
+      bookmarkService.syncGuestBookmarks().catch(() => {});
 
       return { success: true, data: result };
     } catch (error) {
@@ -300,6 +314,9 @@ export const AuthProvider = ({ children }) => {
         await AsyncStorage.setItem(REMEMBER_KEY, registrationData.email);
         setSavedIdentifier(registrationData.email);
       }
+
+      // Sync guest bookmarks to user MongoDB account
+      bookmarkService.syncGuestBookmarks().catch(() => {});
 
       return { success: true, data: result };
     } catch (error) {

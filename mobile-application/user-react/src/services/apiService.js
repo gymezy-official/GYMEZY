@@ -1,5 +1,5 @@
 import { NativeModules } from 'react-native';
-import { getCloudApiUrl } from '../config/envConfig';
+import { getCloudApiUrl, ACTIVE_ENV, ENV_TARGETS } from '../config/envConfig';
 
 const BACKEND_PORT = 5001;
 const CURRENT_MAC_IP = '192.168.0.104';
@@ -99,22 +99,26 @@ class ApiService {
   async executeFetch(endpoint, options = {}, timeoutMs = 15000) {
     const metroHost = getMetroHost();
     const cloudUrl = getCloudApiUrl();
+    const isCloudTarget = ACTIVE_ENV === ENV_TARGETS.DEV || ACTIVE_ENV === ENV_TARGETS.PROD;
 
-    // Priority candidates: In development mode (__DEV__ === true), prioritize localhost, Metro host, and LAN IP.
-    // In production/release builds, connect directly to the targeted cloud API.
-    // Priority candidates: In development mode (__DEV__ === true), prioritize working candidate, Metro host, and LAN IP.
-    // Notice: Over wireless debugging, LOCAL_WIFI_IP must precede loopbacks (localhost/127.0.0.1) which require USB adb reverse.
+    // Priority candidates: If targeted to cloud (DEV or PROD), connect to cloud URL.
+    // If targeted to LOCAL, prioritize local loopbacks/Metro host.
     const candidateBases = __DEV__
-      ? [
-          this.verifiedBase,
-          metroHost ? `http://${metroHost}:${BACKEND_PORT}/api/v1` : null,
-          `http://${LOCAL_WIFI_IP}:${BACKEND_PORT}/api/v1`,
-          `http://${CURRENT_MAC_IP}:${BACKEND_PORT}/api/v1`,
-          `http://localhost:${BACKEND_PORT}/api/v1`,
-          `http://127.0.0.1:${BACKEND_PORT}/api/v1`,
-          `http://10.0.2.2:${BACKEND_PORT}/api/v1`,
-          cloudUrl,
-        ]
+      ? isCloudTarget
+        ? [
+            this.verifiedBase,
+            cloudUrl,
+            metroHost ? `http://${metroHost}:${BACKEND_PORT}/api/v1` : null,
+            `http://localhost:${BACKEND_PORT}/api/v1`,
+            `http://10.0.2.2:${BACKEND_PORT}/api/v1`,
+          ]
+        : [
+            this.verifiedBase,
+            metroHost ? `http://${metroHost}:${BACKEND_PORT}/api/v1` : null,
+            `http://localhost:${BACKEND_PORT}/api/v1`,
+            `http://10.0.2.2:${BACKEND_PORT}/api/v1`,
+            cloudUrl,
+          ]
       : [cloudUrl];
 
     const uniqueBases = Array.from(new Set(candidateBases.filter(Boolean)));
@@ -493,10 +497,66 @@ class ApiService {
   }
 
   /**
-   * Fetch Active Workout Sections / Group Classes for a Gym
+   * Toggle Bookmark Status for a Gym
+   */
+  async toggleBookmark(gymId) {
+    const response = await this.executeFetch(`/gyms/${gymId}/bookmark`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+    });
+    const json = await response.json();
+    if (!response.ok || !json.success) {
+      throw new Error(json.message || 'Failed to toggle bookmark.');
+    }
+    return json.data;
+  }
+
+  /**
+   * Retrieve all gyms bookmarked by the authenticated user
+   */
+  async getMyBookmarkedGyms(params = {}) {
+    let url = '/gyms/bookmarks/my';
+    const query = [];
+    if (params.lat !== undefined && params.lat !== null) query.push(`lat=${params.lat}`);
+    if (params.lng !== undefined && params.lng !== null) query.push(`lng=${params.lng}`);
+    if (query.length > 0) url += `?${query.join('&')}`;
+
+    const response = await this.executeFetch(url, {
+      method: 'GET',
+      headers: this.getHeaders(),
+    });
+    const json = await response.json();
+    if (!response.ok || !json.success) {
+      throw new Error(json.message || 'Failed to fetch bookmarked gyms.');
+    }
+    return json.data;
+  }
+
+  /**
+   * Sync guest / offline bookmarked gym IDs into MongoDB account
+   */
+  async syncBookmarks(gymIds = []) {
+    const response = await this.executeFetch('/gyms/bookmarks/sync', {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ gymIds }),
+    });
+    const json = await response.json();
+    if (!response.ok || !json.success) {
+      throw new Error(json.message || 'Failed to sync bookmarks.');
+    }
+    return json.data;
+  }
+
+  /**
+   * Fetch Active, Bookable Workout Sections / Group Classes for a Gym (Excludes Completed / Started Batches)
    */
   async getGymSections(gymId, params = {}) {
+    const isBookableOnly = params.bookableOnly !== undefined ? params.bookableOnly : true;
     let url = `/sections?gymId=${gymId}&isActive=true`;
+    if (isBookableOnly) {
+      url += `&bookableOnly=true`;
+    }
     if (params.category && params.category !== 'all') {
       url += `&category=${encodeURIComponent(params.category)}`;
     }

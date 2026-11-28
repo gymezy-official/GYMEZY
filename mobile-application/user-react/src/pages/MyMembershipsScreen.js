@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -19,6 +19,8 @@ import { useToast } from '../widgets/CustomScaffoldMessage';
 import { useAuth } from '../context/AuthContext';
 import { membershipService } from '../services/membershipService';
 import { calculateMembershipProgress } from '../utils/dateUtils';
+import { SkeletonBookingCard, SmoothFadeIn } from '../widgets/Skeleton';
+import { getSafeImageUri, getGymLogoUri, getGymCoverImage } from '../utils/mediaUtils';
 
 const TABS = ['Active', 'Completed', 'Cancelled'];
 
@@ -31,9 +33,12 @@ export const MyMembershipsScreen = ({ navigation }) => {
   const user = authContext?.user || null;
 
   const [selectedTab, setSelectedTab] = useState('Active');
-  const [isFetching, setIsFetching] = useState(false);
+  const [isFetching, setIsFetching] = useState(memberships.length === 0);
+  const isFetchingRef = useRef(false);
 
   const loadMemberships = useCallback(async () => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
     try {
       setIsFetching(true);
       const serverList = await membershipService.fetchMyMemberships(user?.id || user?._id);
@@ -46,17 +51,10 @@ export const MyMembershipsScreen = ({ navigation }) => {
             ? new Date(m.endDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })
             : '';
           const resolvedGymLogo =
-            m.gymLogo
-            || (typeof m.gymId?.logo === 'string' && m.gymId.logo.trim())
-            || m.gymId?.logo?.fileData
-            || m.gymId?.logoUrl
-            || m.gymId?.coverPhoto?.fileData
-            || m.gymId?.coverPhotoUrl
-            || m.gymId?.image
-            || m.gymId?.images?.[0]
-            || m.gymId?.imageUrl
-            || m.gymImageUrl
-            || null;
+            getSafeImageUri(m.gymLogo) ||
+            getGymLogoUri(m.gymId) ||
+            getSafeImageUri(m.gymImageUrl) ||
+            getGymCoverImage(m.gymId);
 
           let uniqueDocId = `mem_${idx}`;
           if (m._id) {
@@ -66,6 +64,13 @@ export const MyMembershipsScreen = ({ navigation }) => {
           } else if (m.membershipId) {
             uniqueDocId = `${m.membershipId}_${idx}`;
           }
+
+          const now = new Date();
+          const startDateObj = m.startDate ? new Date(m.startDate) : null;
+          const isFutureStart =
+            startDateObj && !Number.isNaN(startDateObj.getTime()) && startDateObj > now;
+          const resolvedStatus =
+            m.status === 'Active' && isFutureStart ? 'Upcoming' : m.status;
 
           return {
             id: uniqueDocId,
@@ -87,7 +92,7 @@ export const MyMembershipsScreen = ({ navigation }) => {
             rawStartDate: m.startDate,
             rawEndDate: m.endDate,
             paymentMode: m.payment?.method || 'UPI',
-            status: m.status,
+            status: resolvedStatus,
             otp: m.entryOtp || null,
             entryOtp: m.entryOtp || null,
             gymDbId: m.gymId?._id || m.gymId,
@@ -104,6 +109,7 @@ export const MyMembershipsScreen = ({ navigation }) => {
     } catch (err) {
       console.warn('Could not fetch server memberships:', err.message);
     } finally {
+      isFetchingRef.current = false;
       setIsFetching(false);
     }
   }, [user?.id, user?._id, setAllMemberships]);
@@ -148,13 +154,6 @@ export const MyMembershipsScreen = ({ navigation }) => {
       {/* Top App Bar */}
       <View style={styles.appBar}>
         <Text style={[styles.appBarTitle, { color: colors.text }]}>My Memberships</Text>
-        <TouchableOpacity
-          style={[styles.notifBtn, { backgroundColor: isDark ? '#1E1E1E' : '#F8FAFC', borderColor: colors.border }]}
-          activeOpacity={0.7}
-          onPress={() => navigation.navigate('Wallet')}
-        >
-          <Ionicons name="wallet-outline" size={22} color={colors.text} />
-        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -248,24 +247,25 @@ export const MyMembershipsScreen = ({ navigation }) => {
 
         {/* 3. Memberships List */}
         {isFetching && filteredMemberships.length === 0 ? (
-          <View style={[styles.emptyContainer, { paddingVertical: 40 }]}>
-            <ActivityIndicator size="large" color={primaryNavy} />
-            <Text style={[styles.emptySub, { color: colors.subtitle, marginTop: 12 }]}>
-              Loading memberships...
-            </Text>
-          </View>
+          <SmoothFadeIn duration={200} translateY={4} style={{ paddingTop: 8 }}>
+            <SkeletonBookingCard />
+            <SkeletonBookingCard />
+          </SmoothFadeIn>
         ) : filteredMemberships.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <MaterialIcons name="card-membership" size={54} color={colors.subtitle} />
-            <Text style={[styles.emptyTitle, { color: colors.text }]}>
-              No {selectedTab} Memberships
-            </Text>
-            <Text style={[styles.emptySub, { color: colors.subtitle }]}>
-              Your long-term membership passes will appear here.
-            </Text>
-          </View>
+          <SmoothFadeIn key={`empty_${selectedTab}`} duration={280} translateY={10}>
+            <View style={styles.emptyContainer}>
+              <MaterialIcons name="card-membership" size={54} color={colors.subtitle} />
+              <Text style={[styles.emptyTitle, { color: colors.text }]}>
+                No {selectedTab} Memberships
+              </Text>
+              <Text style={[styles.emptySub, { color: colors.subtitle }]}>
+                Your long-term membership passes will appear here.
+              </Text>
+            </View>
+          </SmoothFadeIn>
         ) : (
-          filteredMemberships.map((mbr, idx) => {
+          <SmoothFadeIn key={`list_${selectedTab}`} duration={260} translateY={8}>
+            {filteredMemberships.map((mbr, idx) => {
             const isActive = mbr.status === 'Active';
             const { daysRemaining, progressPercent } = calculateMembershipProgress(mbr);
             const cardKey = mbr._id ? String(mbr._id) : `${mbr.id || 'mem'}_${idx}`;
@@ -284,9 +284,9 @@ export const MyMembershipsScreen = ({ navigation }) => {
               >
                 {/* Header Row */}
                 <View style={styles.cardHeaderRow}>
-                  {mbr.gymImageUrl ? (
+                  {getSafeImageUri(mbr.gymImageUrl) ? (
                     <Image
-                      source={{ uri: mbr.gymImageUrl }}
+                      source={{ uri: getSafeImageUri(mbr.gymImageUrl) }}
                       style={styles.gymAvatar}
                       resizeMode="cover"
                     />
@@ -443,7 +443,8 @@ export const MyMembershipsScreen = ({ navigation }) => {
                 </View>
               </TouchableOpacity>
             );
-          })
+          })}
+          </SmoothFadeIn>
         )}
       </ScrollView>
     </View>

@@ -37,6 +37,18 @@ export const TIME_SLOTS = [
   '08:00 PM', '08:30 PM', '09:00 PM', '09:30 PM', '10:00 PM', '10:30 PM',
 ];
 
+const parseTimeToMinutes = (timeStr) => {
+  if (!timeStr) return -1;
+  const match = String(timeStr).trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!match) return -1;
+  let hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const period = match[3].toUpperCase();
+  if (period === 'PM' && hours !== 12) hours += 12;
+  if (period === 'AM' && hours === 12) hours = 0;
+  return hours * 60 + minutes;
+};
+
 export const ALL_DAYS = [
   { id: 'Mon', label: 'M', full: 'Monday' },
   { id: 'Tue', label: 'T', full: 'Tuesday' },
@@ -165,10 +177,11 @@ export const CreateSectionModal = ({
 
   // Available Trainers List
   const [trainers, setTrainers] = useState([]);
+  const [allEvaluatedTrainers, setAllEvaluatedTrainers] = useState([]);
   const [isLoadingTrainers, setIsLoadingTrainers] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Fetch Gym Trainers on Open
+  // Fetch Available Trainers for the proposed Schedule dynamically
   useEffect(() => {
     if (!visible) return;
 
@@ -176,24 +189,31 @@ export const CreateSectionModal = ({
     const fetchTrainersList = async () => {
       setIsLoadingTrainers(true);
       try {
-        const staffRes = await apiService.getEmployees({ limit: 'all' }).catch(() => []);
-        const staff = Array.isArray(staffRes) ? staffRes : (staffRes?.employees || []);
-        if (isMounted && staff.length > 0) {
-          const gymTrainers = staff.filter(
-            (emp) =>
-              emp.status !== 'Deactivated' &&
-              (!emp.role ||
-                emp.role.toLowerCase().includes('trainer') ||
-                emp.role.toLowerCase().includes('coach'))
-          );
-          const finalTrainers = gymTrainers.length > 0 ? gymTrainers : staff;
-          setTrainers(finalTrainers);
-          if (!trainerId && finalTrainers.length > 0) {
-            setTrainerId(finalTrainers[0]._id || finalTrainers[0].id);
-          }
+        const standardStartDate = parseDDMMYYYYtoStandard(startDate);
+        const data = await apiService.getAvailableTrainers({
+          startDate: standardStartDate || undefined,
+          durationDays: Math.max(1, Number(durationDays) || 20),
+          activeDays,
+          startTime,
+          endTime,
+          excludeSectionId: initialSection?._id || undefined,
+        });
+
+        if (isMounted) {
+          const availList = Array.isArray(data?.availableTrainers) ? data.availableTrainers : [];
+          const allEv = Array.isArray(data?.allTrainers) ? data.allTrainers : [];
+          setTrainers(availList);
+          setAllEvaluatedTrainers(allEv);
+
+          // If current trainerId is no longer in the available list, select first or null
+          setTrainerId((currentId) => {
+            const stillAvailable = availList.some((t) => (t._id || t.id) === currentId);
+            if (stillAvailable) return currentId;
+            return availList.length > 0 ? (availList[0]._id || availList[0].id) : null;
+          });
         }
       } catch (err) {
-        console.warn('Failed to load trainers for section:', err.message);
+        console.warn('Failed to load available trainers for section:', err.message);
       } finally {
         if (isMounted) setIsLoadingTrainers(false);
       }
@@ -203,12 +223,13 @@ export const CreateSectionModal = ({
     return () => {
       isMounted = false;
     };
-  }, [visible, trainerId]);
+  }, [visible, startDate, durationDays, activeDays, startTime, endTime, initialSection?._id]);
 
-  // Selected Trainer Object
+  // Selected Trainer Object (Checking both available and all evaluated trainers so name is never missing)
   const selectedTrainer = useMemo(() => {
-    return trainers.find((t) => (t._id || t.id) === trainerId) || null;
-  }, [trainers, trainerId]);
+    const list = trainers.length > 0 ? trainers : allEvaluatedTrainers;
+    return list.find((t) => (t._id || t.id) === trainerId) || null;
+  }, [trainers, allEvaluatedTrainers, trainerId]);
 
   // Estimated End Date calculation in DD-MM-YYYY taking weekly active days into account
   const estimatedEndDate = useMemo(() => {
@@ -315,427 +336,481 @@ export const CreateSectionModal = ({
   const subTextCol = isDark ? '#94A3B8' : '#64748B';
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
-        <View
-          style={[
-            styles.modalCard,
-            {
-              backgroundColor: cardBg,
-              paddingBottom: insets.bottom > 0 ? insets.bottom + 12 : (Platform.OS === 'ios' ? 34 : 24),
-            },
-          ]}
-        >
-          {/* Header */}
-          <View style={[styles.headerRow, { borderBottomColor: borderCol }]}>
-            <View style={styles.headerTitleWrap}>
-              <View style={styles.iconBadge}>
-                <MaterialIcons name="event-note" size={20} color="#003882" />
-              </View>
-              <Text style={[styles.headerTitle, { color: textCol }]}>
-                {initialSection ? 'Edit Section' : 'Create New Section'}
-              </Text>
+  <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+    <View style={styles.modalOverlay}>
+      <View
+        style={[
+          styles.modalCard,
+          {
+            backgroundColor: cardBg,
+            paddingBottom: insets.bottom > 0 ? insets.bottom + 12 : (Platform.OS === 'ios' ? 34 : 24),
+          },
+        ]}
+      >
+        {/* Header */}
+        <View style={[styles.headerRow, { borderBottomColor: borderCol }]}>
+          <View style={styles.headerTitleWrap}>
+            <View style={styles.iconBadge}>
+              <MaterialIcons name="event-note" size={20} color="#003882" />
             </View>
-            <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-              <MaterialIcons name="close" size={22} color={subTextCol} />
-            </TouchableOpacity>
+            <Text style={[styles.headerTitle, { color: textCol }]}>
+              {initialSection ? 'Edit Section' : 'Create New Section'}
+            </Text>
+          </View>
+          <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
+            <MaterialIcons name="close" size={22} color={subTextCol} />
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+          {/* Section Name / Title */}
+          <View style={styles.formGroup}>
+            <Text style={[styles.inputLabel, { color: textCol }]}>
+              Section Name / Title <Text style={styles.requiredStar}>*</Text>
+            </Text>
+            <TextInput
+              style={[styles.textInput, { backgroundColor: inputBg, borderColor: borderCol, color: textCol }]}
+              placeholder="Enter section title"
+              placeholderTextColor={subTextCol}
+              value={title}
+              onChangeText={setTitle}
+            />
           </View>
 
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-            {/* Section Name / Title */}
-            <View style={styles.formGroup}>
+          {/* Category Selector */}
+          <View style={styles.formGroup}>
+            <Text style={[styles.inputLabel, { color: textCol }]}>Category</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoriesScroll}>
+              {SECTION_CATEGORIES.map((cat) => {
+                const isSelected = category === cat.key;
+                return (
+                  <TouchableOpacity
+                    key={cat.key}
+                    onPress={() => setCategory(cat.key)}
+                    style={[
+                      styles.categoryPill,
+                      {
+                        backgroundColor: isSelected ? '#003882' : inputBg,
+                        borderColor: isSelected ? '#003882' : borderCol,
+                      },
+                    ]}
+                  >
+                    <MaterialIcons
+                      name={cat.icon}
+                      size={15}
+                      color={isSelected ? '#FFFFFF' : cat.color}
+                      style={{ marginRight: 5 }}
+                    />
+                    <Text style={[styles.categoryText, { color: isSelected ? '#FFFFFF' : textCol }]}>
+                      {cat.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          {/* Assigned Trainer Picker */}
+          <View style={styles.formGroup}>
+            <Text style={[styles.inputLabel, { color: textCol }]}>
+              Assigned Trainer <Text style={styles.requiredStar}>*</Text>
+            </Text>
+            <TouchableOpacity
+              onPress={() => setShowTrainerPicker(true)}
+              style={[styles.pickerTrigger, { backgroundColor: inputBg, borderColor: borderCol }]}
+            >
+              <View style={styles.pickerTriggerLeft}>
+                <MaterialIcons name="person" size={20} color="#003882" style={{ marginRight: 8 }} />
+                <Text style={[styles.pickerTriggerText, { color: !isLoadingTrainers && trainers.length === 0 ? '#EF4444' : textCol }]}>
+                  {isLoadingTrainers
+                    ? 'Checking availability...'
+                    : selectedTrainer
+                      ? selectedTrainer.name
+                      : trainers.length === 0
+                        ? 'No trainers available (tap to view)'
+                        : 'Select an available trainer'}
+                </Text>
+              </View>
+              <MaterialIcons name="keyboard-arrow-down" size={20} color={subTextCol} />
+            </TouchableOpacity>
+            {!isLoadingTrainers && trainers.length === 0 && (
+              <Text style={{ fontSize: 11.5, color: '#B45309', marginTop: 4 }}>
+                Adjust start/end time or active days to match a trainer’s shift.
+              </Text>
+            )}
+          </View>
+
+          {/* Cost & Capacity in 2 columns */}
+          <View style={styles.rowTwoCols}>
+            <View style={[styles.formGroup, { flex: 1, marginRight: 8 }]}>
               <Text style={[styles.inputLabel, { color: textCol }]}>
-                Section Name / Title <Text style={styles.requiredStar}>*</Text>
+                Cost (₹) <Text style={styles.requiredStar}>*</Text>
               </Text>
               <TextInput
                 style={[styles.textInput, { backgroundColor: inputBg, borderColor: borderCol, color: textCol }]}
-                placeholder="Enter section title"
+                placeholder="1500"
                 placeholderTextColor={subTextCol}
-                value={title}
-                onChangeText={setTitle}
+                keyboardType="numeric"
+                value={cost}
+                onChangeText={setCost}
               />
             </View>
 
-            {/* Category Selector */}
-            <View style={styles.formGroup}>
-              <Text style={[styles.inputLabel, { color: textCol }]}>Category</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoriesScroll}>
-                {SECTION_CATEGORIES.map((cat) => {
-                  const isSelected = category === cat.key;
-                  return (
-                    <TouchableOpacity
-                      key={cat.key}
-                      onPress={() => setCategory(cat.key)}
-                      style={[
-                        styles.categoryPill,
-                        {
-                          backgroundColor: isSelected ? '#003882' : inputBg,
-                          borderColor: isSelected ? '#003882' : borderCol,
-                        },
-                      ]}
-                    >
-                      <MaterialIcons
-                        name={cat.icon}
-                        size={15}
-                        color={isSelected ? '#FFFFFF' : cat.color}
-                        style={{ marginRight: 5 }}
-                      />
-                      <Text style={[styles.categoryText, { color: isSelected ? '#FFFFFF' : textCol }]}>
-                        {cat.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
+            <View style={[styles.formGroup, { flex: 1, marginLeft: 8 }]}>
+              <Text style={[styles.inputLabel, { color: textCol }]}>Capacity (Seats)</Text>
+              <TextInput
+                style={[styles.textInput, { backgroundColor: inputBg, borderColor: borderCol, color: textCol }]}
+                placeholder="25"
+                placeholderTextColor={subTextCol}
+                keyboardType="numeric"
+                value={maxCapacity}
+                onChangeText={setMaxCapacity}
+              />
+            </View>
+          </View>
+
+          {/* Start Date & Duration in 2 columns */}
+          <View style={styles.rowTwoCols}>
+            <View style={[styles.formGroup, { flex: 1.2, marginRight: 8 }]}>
+              <Text style={[styles.inputLabel, { color: textCol }]}>
+                Start Date (DD-MM-YYYY) <Text style={styles.requiredStar}>*</Text>
+              </Text>
+              <TextInput
+                style={[styles.textInput, { backgroundColor: inputBg, borderColor: borderCol, color: textCol }]}
+                placeholder="21-10-2026"
+                placeholderTextColor={subTextCol}
+                value={startDate}
+                onChangeText={setStartDate}
+              />
             </View>
 
-            {/* Assigned Trainer Picker */}
-            <View style={styles.formGroup}>
-              <Text style={[styles.inputLabel, { color: textCol }]}>
-                Assigned Trainer <Text style={styles.requiredStar}>*</Text>
-              </Text>
+            <View style={[styles.formGroup, { flex: 0.8, marginLeft: 8 }]}>
+              <Text style={[styles.inputLabel, { color: textCol }]}>Duration (Days)</Text>
+              <TextInput
+                style={[styles.textInput, { backgroundColor: inputBg, borderColor: borderCol, color: textCol }]}
+                placeholder="20"
+                placeholderTextColor={subTextCol}
+                keyboardType="numeric"
+                value={durationDays}
+                onChangeText={setDurationDays}
+              />
+            </View>
+          </View>
+
+          {/* Estimated End Date Banner */}
+          <View
+            style={[
+              styles.estEndDateBanner,
+              { backgroundColor: isDark ? '#1E293B' : '#F1F5F9', borderColor: borderCol },
+            ]}
+          >
+            <MaterialIcons name="event" size={18} color="#003882" style={{ marginRight: 8 }} />
+            <Text style={[styles.estEndDateLabel, { color: subTextCol }]}>Estimated End Date: </Text>
+            <Text style={[styles.estEndDateVal, { color: isDark ? '#93C5FD' : '#003882' }]}>
+              {estimatedEndDate}
+            </Text>
+          </View>
+
+          {/* Start Time & End Time */}
+          <View style={styles.rowTwoCols}>
+            <View style={[styles.formGroup, { flex: 1, marginRight: 8 }]}>
+              <Text style={[styles.inputLabel, { color: textCol }]}>Start Time</Text>
               <TouchableOpacity
-                onPress={() => setShowTrainerPicker(true)}
+                onPress={() => setShowStartTimePicker(true)}
                 style={[styles.pickerTrigger, { backgroundColor: inputBg, borderColor: borderCol }]}
               >
-                <View style={styles.pickerTriggerLeft}>
-                  <MaterialIcons name="person" size={20} color="#003882" style={{ marginRight: 8 }} />
-                  <Text style={[styles.pickerTriggerText, { color: textCol }]}>
-                    {selectedTrainer ? selectedTrainer.name : 'Select a gym trainer'}
-                  </Text>
-                </View>
-                <MaterialIcons name="keyboard-arrow-down" size={20} color={subTextCol} />
+                <Text style={[styles.pickerTriggerText, { color: textCol }]}>{startTime}</Text>
+                <MaterialIcons name="schedule" size={18} color="#003882" />
               </TouchableOpacity>
             </View>
 
-            {/* Cost & Capacity in 2 columns */}
-            <View style={styles.rowTwoCols}>
-              <View style={[styles.formGroup, { flex: 1, marginRight: 8 }]}>
-                <Text style={[styles.inputLabel, { color: textCol }]}>
-                  Cost (₹) <Text style={styles.requiredStar}>*</Text>
-                </Text>
-                <TextInput
-                  style={[styles.textInput, { backgroundColor: inputBg, borderColor: borderCol, color: textCol }]}
-                  placeholder="1500"
-                  placeholderTextColor={subTextCol}
-                  keyboardType="numeric"
-                  value={cost}
-                  onChangeText={setCost}
-                />
-              </View>
-
-              <View style={[styles.formGroup, { flex: 1, marginLeft: 8 }]}>
-                <Text style={[styles.inputLabel, { color: textCol }]}>Capacity (Seats)</Text>
-                <TextInput
-                  style={[styles.textInput, { backgroundColor: inputBg, borderColor: borderCol, color: textCol }]}
-                  placeholder="25"
-                  placeholderTextColor={subTextCol}
-                  keyboardType="numeric"
-                  value={maxCapacity}
-                  onChangeText={setMaxCapacity}
-                />
-              </View>
+            <View style={[styles.formGroup, { flex: 1, marginLeft: 8 }]}>
+              <Text style={[styles.inputLabel, { color: textCol }]}>End Time</Text>
+              <TouchableOpacity
+                onPress={() => setShowEndTimePicker(true)}
+                style={[styles.pickerTrigger, { backgroundColor: inputBg, borderColor: borderCol }]}
+              >
+                <Text style={[styles.pickerTriggerText, { color: textCol }]}>{endTime}</Text>
+                <MaterialIcons name="schedule" size={18} color="#003882" />
+              </TouchableOpacity>
             </View>
-
-            {/* Start Date & Duration in 2 columns */}
-            <View style={styles.rowTwoCols}>
-              <View style={[styles.formGroup, { flex: 1.2, marginRight: 8 }]}>
-                <Text style={[styles.inputLabel, { color: textCol }]}>
-                  Start Date (DD-MM-YYYY) <Text style={styles.requiredStar}>*</Text>
-                </Text>
-                <TextInput
-                  style={[styles.textInput, { backgroundColor: inputBg, borderColor: borderCol, color: textCol }]}
-                  placeholder="21-10-2026"
-                  placeholderTextColor={subTextCol}
-                  value={startDate}
-                  onChangeText={setStartDate}
-                />
-              </View>
-
-              <View style={[styles.formGroup, { flex: 0.8, marginLeft: 8 }]}>
-                <Text style={[styles.inputLabel, { color: textCol }]}>Duration (Days)</Text>
-                <TextInput
-                  style={[styles.textInput, { backgroundColor: inputBg, borderColor: borderCol, color: textCol }]}
-                  placeholder="20"
-                  placeholderTextColor={subTextCol}
-                  keyboardType="numeric"
-                  value={durationDays}
-                  onChangeText={setDurationDays}
-                />
-              </View>
-            </View>
-
-            {/* Estimated End Date Banner */}
-            <View
-              style={[
-                styles.estEndDateBanner,
-                { backgroundColor: isDark ? '#1E293B' : '#F1F5F9', borderColor: borderCol },
-              ]}
-            >
-              <MaterialIcons name="event" size={18} color="#003882" style={{ marginRight: 8 }} />
-              <Text style={[styles.estEndDateLabel, { color: subTextCol }]}>Estimated End Date: </Text>
-              <Text style={[styles.estEndDateVal, { color: isDark ? '#93C5FD' : '#003882' }]}>
-                {estimatedEndDate}
-              </Text>
-            </View>
-
-            {/* Start Time & End Time */}
-            <View style={styles.rowTwoCols}>
-              <View style={[styles.formGroup, { flex: 1, marginRight: 8 }]}>
-                <Text style={[styles.inputLabel, { color: textCol }]}>Start Time</Text>
-                <TouchableOpacity
-                  onPress={() => setShowStartTimePicker(true)}
-                  style={[styles.pickerTrigger, { backgroundColor: inputBg, borderColor: borderCol }]}
-                >
-                  <Text style={[styles.pickerTriggerText, { color: textCol }]}>{startTime}</Text>
-                  <MaterialIcons name="schedule" size={18} color="#003882" />
-                </TouchableOpacity>
-              </View>
-
-              <View style={[styles.formGroup, { flex: 1, marginLeft: 8 }]}>
-                <Text style={[styles.inputLabel, { color: textCol }]}>End Time</Text>
-                <TouchableOpacity
-                  onPress={() => setShowEndTimePicker(true)}
-                  style={[styles.pickerTrigger, { backgroundColor: inputBg, borderColor: borderCol }]}
-                >
-                  <Text style={[styles.pickerTriggerText, { color: textCol }]}>{endTime}</Text>
-                  <MaterialIcons name="schedule" size={18} color="#003882" />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Weekly Schedule Days */}
-            <View style={styles.formGroup}>
-              <Text style={[styles.inputLabel, { color: textCol }]}>
-                Weekly Schedule (Recurring Days)
-              </Text>
-              <View style={styles.daysRow}>
-                {ALL_DAYS.map((d) => {
-                  const isSelected = activeDays.includes(d.id);
-                  return (
-                    <TouchableOpacity
-                      key={d.id}
-                      onPress={() => toggleDay(d.id)}
-                      style={[
-                        styles.dayCircle,
-                        {
-                          backgroundColor: isSelected ? '#003882' : inputBg,
-                          borderColor: isSelected ? '#003882' : borderCol,
-                        },
-                      ]}
-                    >
-                      <Text style={[styles.dayText, { color: isSelected ? '#FFFFFF' : textCol }]}>
-                        {d.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-              <Text style={[styles.daysSummaryText, { color: subTextCol }]}>
-                Active on: {activeDays.join(', ')}
-              </Text>
-            </View>
-
-            {/* Description */}
-            <View style={styles.formGroup}>
-              <Text style={[styles.inputLabel, { color: textCol }]}>Description / Guidelines</Text>
-              <TextInput
-                style={[
-                  styles.textInput,
-                  styles.textArea,
-                  { backgroundColor: inputBg, borderColor: borderCol, color: textCol },
-                ]}
-                placeholder="Details about syllabus, prerequisites or equipment..."
-                placeholderTextColor={subTextCol}
-                multiline
-                numberOfLines={3}
-                value={description}
-                onChangeText={setDescription}
-              />
-            </View>
-
-            {/* Inclusions Field */}
-            <View style={styles.formGroup}>
-              <Text style={[styles.label, { color: textCol }]}>What's Included (One item per line)</Text>
-              <TextInput
-                style={[
-                  styles.textInput,
-                  styles.textArea,
-                  { backgroundColor: inputBg, borderColor: borderCol, color: textCol },
-                ]}
-                placeholder={'e.g.\nFull trainer-guided batch sessions\nDedicated yoga studio mats\nLocker and shower facility access'}
-                placeholderTextColor={subTextCol}
-                multiline
-                numberOfLines={3}
-                value={inclusions}
-                onChangeText={setInclusions}
-              />
-            </View>
-
-            {/* Guidelines / Instructions */}
-            <View style={styles.formGroup}>
-              <Text style={[styles.label, { color: textCol }]}>Special Guidelines / Notice</Text>
-              <TextInput
-                style={[
-                  styles.textInput,
-                  styles.textArea,
-                  { backgroundColor: inputBg, borderColor: borderCol, color: textCol },
-                ]}
-                placeholder="e.g. Please arrive 10 minutes before the scheduled time slot."
-                placeholderTextColor={subTextCol}
-                multiline
-                numberOfLines={2}
-                value={instructions}
-                onChangeText={setInstructions}
-              />
-            </View>
-          </ScrollView>
-
-          {/* Action Footer */}
-          <View style={[styles.footerRow, { borderTopColor: borderCol }]}>
-            <TouchableOpacity onPress={onClose} style={[styles.cancelBtn, { borderColor: borderCol }]}>
-              <Text style={[styles.cancelBtnText, { color: subTextCol }]}>Cancel</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={handleSubmit}
-              disabled={isSubmitting}
-              style={[styles.submitBtn, { opacity: isSubmitting ? 0.7 : 1 }]}
-            >
-              {isSubmitting ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : (
-                <Text style={styles.submitBtnText}>
-                  {initialSection ? 'Save Changes' : 'Create Section'}
-                </Text>
-              )}
-            </TouchableOpacity>
           </View>
+
+          {/* Weekly Schedule Days */}
+          <View style={styles.formGroup}>
+            <Text style={[styles.inputLabel, { color: textCol }]}>
+              Weekly Schedule (Recurring Days)
+            </Text>
+            <View style={styles.daysRow}>
+              {ALL_DAYS.map((d) => {
+                const isSelected = activeDays.includes(d.id);
+                return (
+                  <TouchableOpacity
+                    key={d.id}
+                    onPress={() => toggleDay(d.id)}
+                    style={[
+                      styles.dayCircle,
+                      {
+                        backgroundColor: isSelected ? '#003882' : inputBg,
+                        borderColor: isSelected ? '#003882' : borderCol,
+                      },
+                    ]}
+                  >
+                    <Text style={[styles.dayText, { color: isSelected ? '#FFFFFF' : textCol }]}>
+                      {d.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <Text style={[styles.daysSummaryText, { color: subTextCol }]}>
+              Active on: {activeDays.join(', ')}
+            </Text>
+          </View>
+
+          {/* Description */}
+          <View style={styles.formGroup}>
+            <Text style={[styles.inputLabel, { color: textCol }]}>Description / Guidelines</Text>
+            <TextInput
+              style={[
+                styles.textInput,
+                styles.textArea,
+                { backgroundColor: inputBg, borderColor: borderCol, color: textCol },
+              ]}
+              placeholder="Details about syllabus, prerequisites or equipment..."
+              placeholderTextColor={subTextCol}
+              multiline
+              numberOfLines={3}
+              value={description}
+              onChangeText={setDescription}
+            />
+          </View>
+
+          {/* Inclusions Field */}
+          <View style={styles.formGroup}>
+            <Text style={[styles.label, { color: textCol }]}>What's Included (One item per line)</Text>
+            <TextInput
+              style={[
+                styles.textInput,
+                styles.textArea,
+                { backgroundColor: inputBg, borderColor: borderCol, color: textCol },
+              ]}
+              placeholder={'e.g.\nFull trainer-guided batch sessions\nDedicated yoga studio mats\nLocker and shower facility access'}
+              placeholderTextColor={subTextCol}
+              multiline
+              numberOfLines={3}
+              value={inclusions}
+              onChangeText={setInclusions}
+            />
+          </View>
+
+          {/* Guidelines / Instructions */}
+          <View style={styles.formGroup}>
+            <Text style={[styles.label, { color: textCol }]}>Special Guidelines / Notice</Text>
+            <TextInput
+              style={[
+                styles.textInput,
+                styles.textArea,
+                { backgroundColor: inputBg, borderColor: borderCol, color: textCol },
+              ]}
+              placeholder="e.g. Please arrive 10 minutes before the scheduled time slot."
+              placeholderTextColor={subTextCol}
+              multiline
+              numberOfLines={2}
+              value={instructions}
+              onChangeText={setInstructions}
+            />
+          </View>
+        </ScrollView>
+
+        {/* Action Footer */}
+        <View style={[styles.footerRow, { borderTopColor: borderCol }]}>
+          <TouchableOpacity onPress={onClose} style={[styles.cancelBtn, { borderColor: borderCol }]}>
+            <Text style={[styles.cancelBtnText, { color: subTextCol }]}>Cancel</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={handleSubmit}
+            disabled={isSubmitting || trainers.length === 0 || !trainerId}
+            style={[
+              styles.submitBtn,
+              { opacity: isSubmitting || trainers.length === 0 || !trainerId ? 0.45 : 1 },
+            ]}
+          >
+            {isSubmitting ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Text style={styles.submitBtnText}>
+                {initialSection ? 'Save Changes' : 'Create Section'}
+              </Text>
+            )}
+          </TouchableOpacity>
         </View>
       </View>
+    </View>
 
-      {/* Trainer Picker Sub-Modal */}
-      <Modal visible={showTrainerPicker} transparent animationType="fade">
-        <View style={styles.pickerOverlay}>
-          <View style={[styles.pickerCard, { backgroundColor: cardBg }]}>
-            <View style={styles.pickerHeader}>
-              <Text style={[styles.pickerTitle, { color: textCol }]}>Select Gym Trainer</Text>
-              <TouchableOpacity onPress={() => setShowTrainerPicker(false)}>
-                <MaterialIcons name="close" size={20} color={subTextCol} />
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={{ maxHeight: 300 }}>
-              {isLoadingTrainers ? (
-                <ActivityIndicator size="small" color="#003882" style={{ padding: 20 }} />
-              ) : trainers.length === 0 ? (
-                <Text style={{ padding: 20, textAlign: 'center', color: subTextCol }}>
-                  No active trainers found in gym records.
-                </Text>
-              ) : (
-                trainers.map((t) => {
-                  const isSelected = (t._id || t.id) === trainerId;
-                  return (
-                    <TouchableOpacity
-                      key={t._id || t.id}
-                      onPress={() => {
+    {/* Trainer Picker Sub-Modal */}
+    <Modal visible={showTrainerPicker} transparent animationType="fade">
+      <View style={styles.pickerOverlay}>
+        <View style={[styles.pickerCard, { backgroundColor: cardBg }]}>
+          <View style={styles.pickerHeader}>
+            <Text style={[styles.pickerTitle, { color: textCol }]}>Select Available Trainer</Text>
+            <TouchableOpacity onPress={() => setShowTrainerPicker(false)}>
+              <MaterialIcons name="close" size={20} color={subTextCol} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView style={{ maxHeight: 300 }}>
+            {isLoadingTrainers ? (
+              <ActivityIndicator size="small" color="#003882" style={{ padding: 20 }} />
+            ) : (allEvaluatedTrainers.length > 0 ? allEvaluatedTrainers : trainers).length === 0 ? (
+              <Text style={{ padding: 20, textAlign: 'center', color: subTextCol }}>
+                No trainers found in gym staff records.
+              </Text>
+            ) : (
+              (allEvaluatedTrainers.length > 0 ? allEvaluatedTrainers : trainers).map((t) => {
+                const isAvail = t.isAvailable !== false;
+                const isSelected = (t._id || t.id) === trainerId;
+                return (
+                  <TouchableOpacity
+                    key={t._id || t.id}
+                    disabled={!isAvail}
+                    onPress={() => {
+                      if (isAvail) {
                         setTrainerId(t._id || t.id);
                         setShowTrainerPicker(false);
-                      }}
-                      style={[
-                        styles.pickerItem,
-                        {
-                          backgroundColor: isSelected ? 'rgba(0, 56, 130, 0.1)' : 'transparent',
-                          borderColor: borderCol,
-                        },
-                      ]}
-                    >
-                      <View>
-                        <Text style={[styles.pickerItemTitle, { color: textCol }]}>{t.name}</Text>
-                        <Text style={[styles.pickerItemSub, { color: subTextCol }]}>
-                          {t.role || 'Trainer'} {t.employeeId ? `• ${t.employeeId}` : ''}
-                        </Text>
+                      }
+                    }}
+                    style={[
+                      styles.pickerItem,
+                      {
+                        backgroundColor: isSelected ? 'rgba(0, 56, 130, 0.1)' : 'transparent',
+                        borderColor: borderCol,
+                        opacity: isAvail ? 1 : 0.5,
+                      },
+                    ]}
+                  >
+                    <View style={{ flex: 1, marginRight: 8 }}>
+                      <Text style={[styles.pickerItemTitle, { color: textCol }]}>{t.name}</Text>
+                      <Text style={[styles.pickerItemSub, { color: subTextCol }]}>
+                        {t.specialty || t.role || 'Trainer'} {t.employeeId ? `• ${t.employeeId}` : ''}
+                      </Text>
+                    </View>
+                    {isSelected ? (
+                      <MaterialIcons name="check" size={18} color="#003882" />
+                    ) : isAvail ? (
+                      <View style={{ backgroundColor: '#DCFCE7', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 }}>
+                        <Text style={{ color: '#166534', fontSize: 11, fontWeight: '600' }}>Available</Text>
                       </View>
-                      {isSelected ? <MaterialIcons name="check" size={18} color="#003882" /> : null}
-                    </TouchableOpacity>
-                  );
-                })
-              )}
-            </ScrollView>
-          </View>
+                    ) : (
+                      (() => {
+                        const r = String(t.reason || '').trim();
+                        const shortReason = /inactive/i.test(r)
+                          ? 'Inactive'
+                          : r.match(/does not work on\s+([A-Z,\s]+)/i)?.[1]
+                          ? `Off on ${r.match(/does not work on\s+([A-Z,\s]+)/i)[1].trim()}`
+                          : r.match(/working hours\s*\(([^)]+)\)/i)?.[1]
+                          ? `Shift: ${r.match(/working hours\s*\(([^)]+)\)/i)[1].trim()}`
+                          : r || 'Unavailable';
+                        return (
+                          <View style={{ backgroundColor: isDark ? 'rgba(245, 158, 11, 0.15)' : '#FEF3C7', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, maxWidth: '46%' }}>
+                            <Text style={{ color: isDark ? '#FBBF24' : '#B45309', fontSize: 11, fontWeight: '600' }} numberOfLines={1}>
+                              {shortReason}
+                            </Text>
+                          </View>
+                        );
+                      })()
+                    )}
+                  </TouchableOpacity>
+                );
+              })
+            )}
+          </ScrollView>
         </View>
-      </Modal>
-
-      {/* Start Time Picker Sub-Modal */}
-      <Modal visible={showStartTimePicker} transparent animationType="fade">
-        <View style={styles.pickerOverlay}>
-          <View style={[styles.pickerCard, { backgroundColor: cardBg }]}>
-            <View style={styles.pickerHeader}>
-              <Text style={[styles.pickerTitle, { color: textCol }]}>Select Start Time</Text>
-              <TouchableOpacity onPress={() => setShowStartTimePicker(false)}>
-                <MaterialIcons name="close" size={20} color={subTextCol} />
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={{ maxHeight: 280 }}>
-              {TIME_SLOTS.map((slot) => (
-                <TouchableOpacity
-                  key={slot}
-                  onPress={() => {
-                    setStartTime(slot);
-                    setShowStartTimePicker(false);
-                  }}
-                  style={[
-                    styles.pickerItem,
-                    {
-                      backgroundColor: startTime === slot ? 'rgba(0, 56, 130, 0.1)' : 'transparent',
-                      borderColor: borderCol,
-                    },
-                  ]}
-                >
-                  <Text style={[styles.pickerItemTitle, { color: textCol }]}>{slot}</Text>
-                  {startTime === slot ? <MaterialIcons name="check" size={18} color="#003882" /> : null}
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
-      {/* End Time Picker Sub-Modal */}
-      <Modal visible={showEndTimePicker} transparent animationType="fade">
-        <View style={styles.pickerOverlay}>
-          <View style={[styles.pickerCard, { backgroundColor: cardBg }]}>
-            <View style={styles.pickerHeader}>
-              <Text style={[styles.pickerTitle, { color: textCol }]}>Select End Time</Text>
-              <TouchableOpacity onPress={() => setShowEndTimePicker(false)}>
-                <MaterialIcons name="close" size={20} color={subTextCol} />
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={{ maxHeight: 280 }}>
-              {TIME_SLOTS.map((slot) => (
-                <TouchableOpacity
-                  key={slot}
-                  onPress={() => {
-                    setEndTime(slot);
-                    setShowEndTimePicker(false);
-                  }}
-                  style={[
-                    styles.pickerItem,
-                    {
-                      backgroundColor: endTime === slot ? 'rgba(0, 56, 130, 0.1)' : 'transparent',
-                      borderColor: borderCol,
-                    },
-                  ]}
-                >
-                  <Text style={[styles.pickerItemTitle, { color: textCol }]}>{slot}</Text>
-                  {endTime === slot ? <MaterialIcons name="check" size={18} color="#003882" /> : null}
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+      </View>
     </Modal>
-  );
+
+    {/* Start Time Picker Sub-Modal */}
+    <Modal visible={showStartTimePicker} transparent animationType="fade">
+      <View style={styles.pickerOverlay}>
+        <View style={[styles.pickerCard, { backgroundColor: cardBg }]}>
+          <View style={styles.pickerHeader}>
+            <Text style={[styles.pickerTitle, { color: textCol }]}>Select Start Time</Text>
+            <TouchableOpacity onPress={() => setShowStartTimePicker(false)}>
+              <MaterialIcons name="close" size={20} color={subTextCol} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView style={{ maxHeight: 280 }}>
+            {TIME_SLOTS.slice(0, -1).map((slot) => (
+              <TouchableOpacity
+                key={slot}
+                onPress={() => {
+                  setStartTime(slot);
+                  const startMins = parseTimeToMinutes(slot);
+                  const endMins = parseTimeToMinutes(endTime);
+                  if (startMins >= 0 && (endMins < 0 || endMins <= startMins)) {
+                    const nextSlot =
+                      TIME_SLOTS.find((s) => parseTimeToMinutes(s) >= startMins + 60) ||
+                      TIME_SLOTS.find((s) => parseTimeToMinutes(s) > startMins);
+                    if (nextSlot) setEndTime(nextSlot);
+                  }
+                  setShowStartTimePicker(false);
+                }}
+                style={[
+                  styles.pickerItem,
+                  {
+                    backgroundColor: startTime === slot ? 'rgba(0, 56, 130, 0.1)' : 'transparent',
+                    borderColor: borderCol,
+                  },
+                ]}
+              >
+                <Text style={[styles.pickerItemTitle, { color: textCol }]}>{slot}</Text>
+                {startTime === slot ? <MaterialIcons name="check" size={18} color="#003882" /> : null}
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+
+    {/* End Time Picker Sub-Modal */}
+    <Modal visible={showEndTimePicker} transparent animationType="fade">
+      <View style={styles.pickerOverlay}>
+        <View style={[styles.pickerCard, { backgroundColor: cardBg }]}>
+          <View style={styles.pickerHeader}>
+            <Text style={[styles.pickerTitle, { color: textCol }]}>Select End Time</Text>
+            <TouchableOpacity onPress={() => setShowEndTimePicker(false)}>
+              <MaterialIcons name="close" size={20} color={subTextCol} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView style={{ maxHeight: 280 }}>
+            {TIME_SLOTS.filter((slot) => {
+              const startMins = parseTimeToMinutes(startTime);
+              return startMins < 0 || parseTimeToMinutes(slot) > startMins;
+            }).map((slot) => (
+              <TouchableOpacity
+                key={slot}
+                onPress={() => {
+                  setEndTime(slot);
+                  setShowEndTimePicker(false);
+                }}
+                style={[
+                  styles.pickerItem,
+                  {
+                    backgroundColor: endTime === slot ? 'rgba(0, 56, 130, 0.1)' : 'transparent',
+                    borderColor: borderCol,
+                  },
+                ]}
+              >
+                <Text style={[styles.pickerItemTitle, { color: textCol }]}>{slot}</Text>
+                {endTime === slot ? <MaterialIcons name="check" size={18} color="#003882" /> : null}
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  </Modal>
+);
 };
 
 const styles = StyleSheet.create({

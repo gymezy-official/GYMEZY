@@ -23,13 +23,13 @@ import {
   InputNumber,
   Avatar,
   Spin,
+  Image,
 } from 'antd';
 import {
   SearchOutlined,
   EnvironmentOutlined,
   PhoneOutlined,
   FilterOutlined,
-  PlusOutlined,
   DownloadOutlined,
   DownOutlined,
   EditOutlined,
@@ -60,6 +60,9 @@ import {
   CloseOutlined,
   IdcardOutlined,
   ReloadOutlined,
+  ExclamationCircleOutlined,
+  InfoCircleOutlined,
+  SendOutlined,
 } from '@ant-design/icons';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
@@ -343,7 +346,11 @@ export const GymsManagement = () => {
   const [isQuickAddModalOpen, setIsQuickAddModalOpen] = useState(false);
   const [isProcessingStatus, setIsProcessingStatus] = useState(false);
   const [quickAddForm] = Form.useForm();
-  const [rejectionReason, setRejectionReason] = useState('');
+  const [rejectionReason, setRejectionReason] = useState('Incomplete / Blurred Documents');
+  const [customRejectionReason, setCustomRejectionReason] = useState('');
+  const [rejectionNote, setRejectionNote] = useState('');
+  const [holdReason, setHoldReason] = useState('Document Verification Pending');
+  const [customHoldReason, setCustomHoldReason] = useState('');
   const [holdNotes, setHoldNotes] = useState('');
   const [adminNote, setAdminNote] = useState('');
 
@@ -400,10 +407,33 @@ export const GymsManagement = () => {
     setCurrentPage(1);
   }, [currentTab]);
 
+  // Sync sub-breadcrumb in AppBar when reviewing a gym
+  useEffect(() => {
+    if ((currentView === 'review' || currentView === 'timing_diff') && selectedGym) {
+      window.dispatchEvent(
+        new CustomEvent('gymezy-breadcrumb-sub', {
+          detail: {
+            label: selectedGym.name || 'Gym Review',
+            onBack: () => setCurrentView('list'),
+          },
+        })
+      );
+    } else {
+      window.dispatchEvent(new CustomEvent('gymezy-breadcrumb-sub', { detail: null }));
+    }
+    return () => {
+      window.dispatchEvent(new CustomEvent('gymezy-breadcrumb-sub', { detail: null }));
+    };
+  }, [currentView, selectedGym]);
+
   const handleOpenReview = (gym) => {
     setSelectedGym(gym);
-    setHoldNotes(gym.remark || '');
-    setRejectionReason(gym.remark || gym.rejectionReason || '');
+    setHoldNotes(gym.rejectionNote || gym.remark || '');
+    setHoldReason(gym.rejectionReason || 'Document Verification Pending');
+    setCustomHoldReason('');
+    setRejectionNote(gym.rejectionNote || gym.remark || '');
+    setRejectionReason(gym.rejectionReason || 'Incomplete / Blurred Documents');
+    setCustomRejectionReason('');
     setCurrentView('review');
   };
 
@@ -426,9 +456,10 @@ export const GymsManagement = () => {
       try {
         await dispatch(updateGymStatusApi({ id, status: 'Approved', approvalStatus: 'Approved' })).unwrap();
         message.success(`Gym "${target.name}" approved and published to customer app!`);
-        dispatch(fetchGyms());
         setIsApproveModalOpen(false);
         setCurrentView('list');
+        setSearchParams({ tab: 'approved' });
+        loadGyms({ tab: 'approved', force: true });
       } catch (err) {
         message.error(err || 'Failed to approve gym');
       } finally {
@@ -440,19 +471,35 @@ export const GymsManagement = () => {
     }
   };
 
-  const handleHold = async (targetGym, notes) => {
+  const handleHold = async (targetGym, reason, notes) => {
     const target = targetGym || selectedGym;
+    const finalReason = reason !== undefined
+      ? reason
+      : (holdReason === 'Other' ? (customHoldReason.trim() || 'Verification On Hold') : holdReason);
     const finalNotes = notes !== undefined ? notes : holdNotes;
     if (target) {
       const id = target.id || target._id;
       setIsProcessingStatus(true);
       try {
-        await dispatch(updateGymStatusApi({ id, status: 'On Hold', approvalStatus: 'On Hold', remark: finalNotes, notes: finalNotes })).unwrap();
+        await dispatch(
+          updateGymStatusApi({
+            id,
+            status: 'On Hold',
+            approvalStatus: 'On Hold',
+            rejectionReason: finalReason,
+            rejectionNote: finalNotes,
+            remark: finalNotes || finalReason,
+            notes: finalNotes,
+          })
+        ).unwrap();
         message.info(`Gym "${target.name}" put on hold.`);
-        dispatch(fetchGyms());
         setIsHoldModalOpen(false);
+        setHoldReason('Document Verification Pending');
+        setCustomHoldReason('');
         setHoldNotes('');
         setCurrentView('list');
+        setSearchParams({ tab: 'on_hold' });
+        loadGyms({ tab: 'on_hold', force: true });
       } catch (err) {
         message.error(err || 'Failed to put gym on hold');
       } finally {
@@ -465,19 +512,34 @@ export const GymsManagement = () => {
     }
   };
 
-  const handleReject = async (targetGym, notes) => {
+  const handleReject = async (targetGym, reason, notes) => {
     const target = targetGym || selectedGym;
-    const finalNotes = notes !== undefined ? notes : rejectionReason;
+    const finalReason = reason !== undefined
+      ? reason
+      : (rejectionReason === 'Other' ? (customRejectionReason.trim() || 'Application Requirements Not Met') : rejectionReason);
+    const finalNotes = notes !== undefined ? notes : rejectionNote;
     if (target) {
       const id = target.id || target._id;
       setIsProcessingStatus(true);
       try {
-        await dispatch(updateGymStatusApi({ id, status: 'Rejected', approvalStatus: 'Rejected', rejectionReason: finalNotes, remark: finalNotes })).unwrap();
+        await dispatch(
+          updateGymStatusApi({
+            id,
+            status: 'Rejected',
+            approvalStatus: 'Rejected',
+            rejectionReason: finalReason,
+            rejectionNote: finalNotes,
+            remark: finalNotes || finalReason,
+          })
+        ).unwrap();
         message.warning(`Changes for "${target.name}" rejected. Notes sent to partner.`);
-        dispatch(fetchGyms());
         setIsRejectModalOpen(false);
-        setRejectionReason('');
+        setRejectionReason('Incomplete / Blurred Documents');
+        setCustomRejectionReason('');
+        setRejectionNote('');
         setCurrentView('list');
+        setSearchParams({ tab: 'rejected' });
+        loadGyms({ tab: 'rejected', force: true });
       } catch (err) {
         message.error(err || 'Failed to reject gym');
       } finally {
@@ -485,7 +547,7 @@ export const GymsManagement = () => {
       }
     } else {
       setIsRejectModalOpen(false);
-      setRejectionReason('');
+      setRejectionNote('');
       setCurrentView('list');
     }
   };
@@ -780,40 +842,6 @@ export const GymsManagement = () => {
 
     return (
       <div style={{ maxWidth: 1280, margin: '0 auto' }}>
-        {/* Top Back Link & Switcher */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
-          <Button
-            type="link"
-            icon={<ArrowLeftOutlined />}
-            onClick={() => setCurrentView('list')}
-            style={{ padding: 0, fontWeight: 600, color: 'var(--color-primary)', fontSize: 14 }}
-          >
-            Back to Gyms Fleet
-          </Button>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: isDarkMode ? '#cbd5e1' : '#475569' }}>
-              Switch Pending Gym:
-            </span>
-            <Select
-              value={selectedGym?.id || selectedGym?._id}
-              onChange={(gymId) => {
-                const target = reduxGyms.find((g) => (g.id || g._id) === gymId);
-                if (target) setSelectedGym(target);
-              }}
-              style={{ width: 220 }}
-            >
-              {reduxGyms
-                .filter((g) => g.approvalStatus === 'Pending Approval' || g.status === 'Pending')
-                .map((g) => (
-                  <Option key={g.id || g._id} value={g.id || g._id}>
-                    {g.name}
-                  </Option>
-                ))}
-            </Select>
-          </div>
-        </div>
-
         {/* Gym Header & Action Buttons */}
         <div
           style={{
@@ -901,6 +929,114 @@ export const GymsManagement = () => {
             </Button>
           </div>
         </div>
+
+        {/* 1. REJECTION / HOLD FEEDBACK BANNER */}
+        {Boolean(
+          selectedGym?.rejectionReason ||
+          selectedGym?.rejectionNote ||
+          selectedGym?.approvalStatus === 'Rejected' ||
+          selectedGym?.approvalStatus === 'On Hold' ||
+          (selectedGym?.remark && selectedGym?.remark !== 'Approved and published by Super Admin')
+        ) && (
+          <div
+            style={{
+              padding: '16px 20px',
+              borderRadius: 8,
+              backgroundColor: isDarkMode
+                ? (selectedGym?.approvalStatus === 'On Hold' ? 'rgba(245, 158, 11, 0.08)' : 'rgba(239, 68, 68, 0.08)')
+                : (selectedGym?.approvalStatus === 'On Hold' ? '#fffbe7' : '#fef2f2'),
+              border: `1px solid ${selectedGym?.approvalStatus === 'On Hold' ? '#fde68a' : '#fecaca'}`,
+              borderLeft: `5px solid ${selectedGym?.approvalStatus === 'On Hold' ? '#f59e0b' : '#ef4444'}`,
+              marginBottom: 20,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <ExclamationCircleOutlined style={{ fontSize: 18, color: selectedGym?.approvalStatus === 'On Hold' ? '#f59e0b' : '#ef4444' }} />
+                <span style={{ fontWeight: 700, fontSize: 14, color: isDarkMode ? '#f8fafc' : '#0f172a' }}>
+                  {selectedGym?.approvalStatus === 'On Hold' ? 'Application Put On Hold' : 'Rejection Feedback & Requirements'}
+                </span>
+                <Tag color={selectedGym?.approvalStatus === 'On Hold' ? 'warning' : 'error'} style={{ fontWeight: 700 }}>
+                  {selectedGym?.approvalStatus === 'On Hold' ? 'On Hold' : 'Rejected'}
+                </Tag>
+              </div>
+              {selectedGym?.rejectionReason && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: isDarkMode ? '#94a3b8' : '#64748b' }}>Reason:</span>
+                  <Tag color="volcano" style={{ fontWeight: 700, fontSize: 12 }}>
+                    {selectedGym.rejectionReason}
+                  </Tag>
+                </div>
+              )}
+            </div>
+            {(selectedGym?.rejectionNote || selectedGym?.remark) && (
+              <div
+                style={{
+                  fontSize: 13,
+                  color: isDarkMode ? '#cbd5e1' : '#334155',
+                  backgroundColor: isDarkMode ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.7)',
+                  padding: '10px 14px',
+                  borderRadius: 6,
+                  border: `1px dashed ${selectedGym?.approvalStatus === 'On Hold' ? '#fde68a' : '#fecaca'}`,
+                  lineHeight: 1.5,
+                }}
+              >
+                <strong style={{ color: selectedGym?.approvalStatus === 'On Hold' ? '#d97706' : '#dc2626' }}>
+                  Admin Rejection Note:
+                </strong>{' '}
+                {selectedGym.rejectionNote || selectedGym.remark}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 2. PARTNER RESUBMISSION NOTES BANNER */}
+        {Boolean(selectedGym?.resubmissionNote) && (
+          <div
+            style={{
+              padding: '16px 20px',
+              borderRadius: 8,
+              backgroundColor: isDarkMode ? 'rgba(59, 130, 246, 0.08)' : '#eff6ff',
+              border: '1px solid #bfdbfe',
+              borderLeft: '5px solid #2563eb',
+              marginBottom: 20,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <CheckCircleOutlined style={{ fontSize: 18, color: '#2563eb' }} />
+                <span style={{ fontWeight: 700, fontSize: 14, color: isDarkMode ? '#f8fafc' : '#0f172a' }}>
+                  Owner Resubmission Description & Clarifications
+                </span>
+                <Tag color="processing" style={{ fontWeight: 700 }}>
+                  Resubmitted by Partner
+                </Tag>
+              </div>
+              {selectedGym?.resubmittedAt && (
+                <span style={{ fontSize: 12, color: isDarkMode ? '#94a3b8' : '#64748b' }}>
+                  Resubmitted on: {new Date(selectedGym.resubmittedAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+                </span>
+              )}
+            </div>
+            <div
+              style={{
+                fontSize: 13,
+                color: isDarkMode ? '#cbd5e1' : '#1e3a8a',
+                backgroundColor: isDarkMode ? 'rgba(0,0,0,0.25)' : '#ffffff',
+                padding: '12px 14px',
+                borderRadius: 6,
+                border: '1px solid #dbeafe',
+                lineHeight: 1.6,
+                fontWeight: 500,
+              }}
+            >
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#2563eb', marginBottom: 4 }}>
+                Changes & Corrections made by Gym Partner:
+              </div>
+              {selectedGym.resubmissionNote}
+            </div>
+          </div>
+        )}
 
         {/* Dynamic Changes / Verification Container */}
         {(() => {
@@ -1278,50 +1414,334 @@ export const GymsManagement = () => {
                   </div>
                 </div>
               ) : (
-                /* New Onboard or Full Verification Card View */
-                <Row gutter={[20, 20]}>
-                  <Col xs={24} md={12}>
-                    <Card
-                      title={<span style={{ fontWeight: 700 }}>Basic Information</span>}
-                      style={{ backgroundColor: 'var(--bg-surface-elevated)', borderColor: 'var(--border-color)', borderRadius: 'var(--radius-base)', height: '100%' }}
-                    >
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13 }}>
-                        <div><strong>Gym Name:</strong> {selectedGym?.name || '—'}</div>
-                        <div><strong>Owner Name:</strong> {selectedGym?.ownerName || '—'}</div>
-                        <div><strong>Phone:</strong> {selectedGym?.phone || '—'}</div>
-                        <div><strong>Email:</strong> {selectedGym?.email || '—'}</div>
-                        <div><strong>GST / PAN:</strong> {selectedGym?.gstNumber || '—'} / {selectedGym?.panNumber || '—'}</div>
-                        <div><strong>Address:</strong> {selectedGym?.address || selectedGym?.fullAddress || `${selectedGym?.area || ''} ${selectedGym?.city || ''}`}</div>
-                      </div>
-                    </Card>
-                  </Col>
+                /* New Onboard or Full Verification Card View (All DB Fields) */
+                (() => {
+                  const g = selectedGym || {};
+                  const op = g.openingHours || {};
+                  const timingMode = op.mode || (op.is24Hours ? '24_HOURS' : op.morningShift ? 'SPLIT_SHIFT' : 'REGULAR');
+                  const fullAddress = [g.address, g.area, g.city, g.state].filter(Boolean).join(', ') + (g.pincode ? ` - ${g.pincode}` : '');
+                  const coordsText =
+                    Array.isArray(g.location?.coordinates) &&
+                    g.location.coordinates.length >= 2 &&
+                    Number.isFinite(Number(g.location.coordinates[0])) &&
+                    Number.isFinite(Number(g.location.coordinates[1]))
+                      ? `${Number(g.location.coordinates[1]).toFixed(5)}, ${Number(g.location.coordinates[0]).toFixed(5)}`
+                      : null;
 
-                  <Col xs={24} md={12}>
-                    <Card
-                      title={<span style={{ fontWeight: 700 }}>Facilities & Operations</span>}
-                      style={{ backgroundColor: 'var(--bg-surface-elevated)', borderColor: 'var(--border-color)', borderRadius: 'var(--radius-base)', height: '100%' }}
-                    >
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13 }}>
-                        <div>
-                          <strong>Operating Hours:</strong>{' '}
-                          {selectedGym?.openingHours?.displayText ||
-                            `${selectedGym?.openingHours?.weekdayOpen || '05:30 AM'} - ${selectedGym?.openingHours?.weekdayClose || '10:30 PM'}`}
-                        </div>
-                        <div>
-                          <strong>Floor Space / Capacity:</strong> {selectedGym?.floorSpaceSqFt || 3500} sq.ft / {selectedGym?.maxFloorCapacity || 60} persons
-                        </div>
-                        <div>
-                          <strong>Facilities:</strong>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
-                            {(selectedGym?.facilities || []).map((f, i) => (
-                              <Tag key={i} color="blue">{typeof f === 'string' ? f : f.name}</Tag>
-                            ))}
+                  const logoSrc = typeof g.logo === 'string' ? g.logo : g.logo?.fileData || '';
+                  const coverSrc = typeof g.coverPhoto === 'string' ? g.coverPhoto : g.coverPhoto?.fileData || '';
+                  const galleryList = Array.isArray(g.galleryPhotos)
+                    ? g.galleryPhotos
+                        .map((p) => (typeof p === 'string' ? p : p?.fileData || ''))
+                        .filter(Boolean)
+                    : [];
+
+                  const cardStyle = {
+                    backgroundColor: 'var(--bg-surface-elevated)',
+                    borderColor: 'var(--border-color)',
+                    borderRadius: 'var(--radius-base)',
+                    height: '100%',
+                  };
+                  const labelStyle = {
+                    fontSize: 11,
+                    color: isDarkMode ? '#94a3b8' : '#64748b',
+                    marginBottom: 2,
+                    fontWeight: 600,
+                  };
+                  const valStyle = {
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: isDarkMode ? '#f1f5f9' : '#0f172a',
+                    wordBreak: 'break-word',
+                  };
+
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                      {/* 1. Gym Details & Business Profile */}
+                      <Card title={<span style={{ fontWeight: 700 }}>Gym & Business Details</span>} style={cardStyle}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
+                          <div>
+                            <div style={labelStyle}>Gym Name</div>
+                            <div style={valStyle}>{g.name || '—'}</div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>Tagline</div>
+                            <div style={valStyle}>{g.tagline || '—'}</div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>Owner / Partner Name</div>
+                            <div style={valStyle}>{g.ownerName || '—'}</div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>Email</div>
+                            <div style={valStyle}>{g.email || '—'}</div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>Phone</div>
+                            <div style={valStyle}>{g.phone || '—'}</div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>Business Type</div>
+                            <div style={valStyle}>{g.businessType || '—'}</div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>Year Established</div>
+                            <div style={valStyle}>{g.yearEstablished || '—'}</div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>Plan Model</div>
+                            <div style={valStyle}>{g.subscriptionType || '—'}</div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>GST Number</div>
+                            <div style={{ ...valStyle, fontFamily: 'monospace' }}>{g.gstNumber || '—'}</div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>PAN Number</div>
+                            <div style={{ ...valStyle, fontFamily: 'monospace' }}>{g.panNumber || '—'}</div>
                           </div>
                         </div>
-                      </div>
-                    </Card>
-                  </Col>
-                </Row>
+                        {Boolean(g.aboutText) && (
+                          <div style={{ marginTop: 16, paddingTop: 12, borderTop: `1px solid ${isDarkMode ? '#1e293b' : '#f1f5f9'}` }}>
+                            <div style={labelStyle}>About Facility</div>
+                            <div style={{ ...valStyle, fontWeight: 400, lineHeight: 1.5 }}>{g.aboutText}</div>
+                          </div>
+                        )}
+                      </Card>
+
+                      {/* 2. Location, Geolocation & Operating Schedule */}
+                      <Card title={<span style={{ fontWeight: 700 }}>Location & Operating Schedule</span>} style={cardStyle}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 }}>
+                          <div style={{ gridColumn: '1 / -1' }}>
+                            <div style={labelStyle}>Address</div>
+                            <div style={valStyle}>
+                              <EnvironmentOutlined style={{ marginRight: 6, color: '#2563eb' }} />
+                              {fullAddress || g.fullAddress || '—'}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>Landmark</div>
+                            <div style={valStyle}>{g.landmark || '—'}</div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>GPS Coordinates</div>
+                            <div style={{ ...valStyle, fontFamily: 'monospace', fontSize: 12 }}>
+                              {coordsText || '—'}
+                              {Boolean(g.googleMapsUrl) && (
+                                <a
+                                  href={g.googleMapsUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{ marginLeft: 8, fontFamily: 'sans-serif', fontSize: 12, color: '#2563eb' }}
+                                >
+                                  View Map
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>Floor Space & Max Capacity</div>
+                            <div style={valStyle}>
+                              {g.floorSpaceSqFt || g.maxFloorCapacity
+                                ? `${g.floorSpaceSqFt ?? '—'} sq.ft / ${g.maxFloorCapacity ?? '—'} persons`
+                                : '—'}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>Open on Public Holidays</div>
+                            <div style={valStyle}>{op.isOpenHolidays === false ? 'No' : 'Yes'}</div>
+                          </div>
+                          <div style={{ gridColumn: '1 / -1' }}>
+                            <div style={labelStyle}>Operating Hours & Timing Model</div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
+                              <Tag color={timingMode === '24_HOURS' ? 'green' : timingMode === 'SPLIT_SHIFT' ? 'purple' : 'blue'}>
+                                {timingMode === '24_HOURS' ? '24/7 Access' : timingMode === 'SPLIT_SHIFT' ? 'Split Shift' : 'Single Shift'}
+                              </Tag>
+                              {timingMode === '24_HOURS' ? (
+                                <span style={valStyle}>Open 24 Hours Round-the-Clock</span>
+                              ) : timingMode === 'SPLIT_SHIFT' ? (
+                                <span style={valStyle}>
+                                  Morning: {op.morningShift?.open || op.morningOpen || '—'} – {op.morningShift?.close || op.morningClose || '—'} | Evening: {op.eveningShift?.open || op.eveningOpen || '—'} – {op.eveningShift?.close || op.eveningClose || '—'}
+                                </span>
+                              ) : (
+                                <span style={valStyle}>
+                                  Weekdays: {op.weekdayOpen || '—'} – {op.weekdayClose || '—'} | Weekends: {op.weekendOpen || '—'} – {op.weekendClose || '—'}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </Card>
+
+                      {/* 3. Pricing & Passes */}
+                      <Card title={<span style={{ fontWeight: 700 }}>Pricing & Passes</span>} style={cardStyle}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 16 }}>
+                          <div>
+                            <div style={labelStyle}>Single Session</div>
+                            <div style={{ ...valStyle, fontSize: 16, fontWeight: 800, color: '#16a34a' }}>
+                              {(g.singleSessionPrice ?? g.pricingPlans?.singleSession) != null
+                                ? `₹${g.singleSessionPrice ?? g.pricingPlans?.singleSession}`
+                                : '—'}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>Monthly Pass</div>
+                            <div style={{ ...valStyle, fontSize: 16, fontWeight: 700 }}>
+                              {g.pricingPlans?.monthly != null ? `₹${g.pricingPlans.monthly}` : '—'}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>Quarterly (3M)</div>
+                            <div style={{ ...valStyle, fontSize: 16, fontWeight: 700 }}>
+                              {g.pricingPlans?.quarterly != null ? `₹${g.pricingPlans.quarterly}` : '—'}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>Annual Pass</div>
+                            <div style={{ ...valStyle, fontSize: 16, fontWeight: 700 }}>
+                              {g.pricingPlans?.annual != null ? `₹${g.pricingPlans.annual}` : '—'}
+                            </div>
+                          </div>
+                        </div>
+                      </Card>
+
+                      {/* 4. Facilities, Amenities & Workout Disciplines */}
+                      <Card title={<span style={{ fontWeight: 700 }}>Facilities, Amenities & Workout Disciplines</span>} style={cardStyle}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                          <div>
+                            <div style={{ ...labelStyle, textTransform: 'uppercase', marginBottom: 6 }}>
+                              Active Facilities ({Array.isArray(g.facilities) ? g.facilities.length : 0})
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                              {Array.isArray(g.facilities) && g.facilities.length > 0 ? (
+                                g.facilities.map((f, i) => (
+                                  <Tag key={i} color="blue" style={{ margin: 0 }}>
+                                    {typeof f === 'string' ? f : f?.name}
+                                  </Tag>
+                                ))
+                              ) : (
+                                <span style={{ fontSize: 12, color: '#94a3b8' }}>None listed</span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div>
+                            <div style={{ ...labelStyle, textTransform: 'uppercase', marginBottom: 6 }}>
+                              Workout Disciplines ({Array.isArray(g.workouts) ? g.workouts.length : 0})
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                              {Array.isArray(g.workouts) && g.workouts.length > 0 ? (
+                                g.workouts.map((w, i) => (
+                                  <Tag key={i} color="purple" style={{ margin: 0 }}>
+                                    {typeof w === 'string' ? w : w?.name}
+                                  </Tag>
+                                ))
+                              ) : (
+                                <span style={{ fontSize: 12, color: '#94a3b8' }}>None listed</span>
+                              )}
+                            </div>
+                          </div>
+
+                          {Array.isArray(g.amenities) && g.amenities.length > 0 && (
+                            <div>
+                              <div style={{ ...labelStyle, textTransform: 'uppercase', marginBottom: 6 }}>
+                                Amenities ({g.amenities.length})
+                              </div>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                {g.amenities.map((a, i) => (
+                                  <Tag key={i} color="cyan" style={{ margin: 0 }}>
+                                    {typeof a === 'string' ? a : a?.name}
+                                  </Tag>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </Card>
+
+                      {/* 5. Settlement Bank Account */}
+                      <Card title={<span style={{ fontWeight: 700 }}>Settlement Bank Account</span>} style={cardStyle}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
+                          <div>
+                            <div style={labelStyle}>Account Holder</div>
+                            <div style={valStyle}>{g.bankDetails?.accountHolder || '—'}</div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>Bank Name</div>
+                            <div style={valStyle}>{g.bankDetails?.bankName || '—'}</div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>Account Number</div>
+                            <div style={{ ...valStyle, fontFamily: 'monospace' }}>
+                              {g.bankDetails?.accountNumber || '—'}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>IFSC Code</div>
+                            <div style={{ ...valStyle, fontFamily: 'monospace' }}>
+                              {g.bankDetails?.ifscCode || '—'}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={labelStyle}>UPI ID</div>
+                            <div style={valStyle}>{g.bankDetails?.upiId || '—'}</div>
+                          </div>
+                        </div>
+                      </Card>
+
+                      {/* 6. Brand Media & Facility Photos */}
+                      {(logoSrc || coverSrc || galleryList.length > 0) && (
+                        <Card title={<span style={{ fontWeight: 700 }}>Brand Media & Facility Photos</span>} style={cardStyle}>
+                          <Image.PreviewGroup>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start' }}>
+                              {logoSrc && (
+                                <div>
+                                  <div style={labelStyle}>Brand Logo</div>
+                                  <Image
+                                    src={logoSrc}
+                                    alt="Logo"
+                                    width={90}
+                                    height={90}
+                                    style={{ objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border-color)' }}
+                                  />
+                                </div>
+                              )}
+                              {coverSrc && (
+                                <div>
+                                  <div style={labelStyle}>Cover Banner</div>
+                                  <Image
+                                    src={coverSrc}
+                                    alt="Cover"
+                                    width={160}
+                                    height={90}
+                                    style={{ objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border-color)' }}
+                                  />
+                                </div>
+                              )}
+                              {galleryList.length > 0 && (
+                                <div style={{ flex: 1, minWidth: 220 }}>
+                                  <div style={labelStyle}>Facility Gallery ({galleryList.length})</div>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                                    {galleryList.map((src, i) => (
+                                      <Image
+                                        key={i}
+                                        src={src}
+                                        alt={`Facility ${i + 1}`}
+                                        width={110}
+                                        height={80}
+                                        style={{ objectFit: 'cover', borderRadius: 6, border: '1px solid var(--border-color)' }}
+                                      />
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </Image.PreviewGroup>
+                        </Card>
+                      )}
+                    </div>
+                  );
+                })()
               )}
             </div>
           );
@@ -1397,27 +1817,61 @@ export const GymsManagement = () => {
           maskClosable={!isProcessingStatus}
           footer={null}
           centered
-          width={480}
+          width={520}
         >
           <div style={{ padding: '12px 0' }}>
-            <p style={{ fontSize: 13, color: isDarkMode ? '#aaaaaa' : '#64748b', marginBottom: 12 }}>
-              Specify the required updates or missing information for <strong>{selectedGym?.name || 'Selected Gym'}</strong>:
+            <p style={{ fontSize: 13, color: isDarkMode ? '#aaaaaa' : '#64748b', marginBottom: 14 }}>
+              Specify the hold reason and required updates for <strong>{selectedGym?.name || 'Selected Gym'}</strong>:
             </p>
-            <TextArea
-              rows={4}
-              disabled={isProcessingStatus}
-              value={holdNotes}
-              onChange={(e) => setHoldNotes(e.target.value)}
-              placeholder="e.g. Please upload trade license with clear stamp, update opening hours..."
-              style={{ marginBottom: 18 }}
-            />
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 6, color: isDarkMode ? '#cbd5e1' : '#334155' }}>
+                Reason for Hold <span style={{ color: '#fa8c16' }}>*</span>
+              </label>
+              <Select
+                value={holdReason}
+                onChange={(val) => setHoldReason(val)}
+                style={{ width: '100%' }}
+                options={[
+                  { value: 'Document Verification Pending', label: 'Document Verification Pending with Authority' },
+                  { value: 'Field / Physical Inspection Scheduled', label: 'Field / Physical Inspection Scheduled' },
+                  { value: 'Clarification Needed from Partner', label: 'Clarification Needed from Gym Partner' },
+                  { value: 'Bank Settlement Mandate Incomplete', label: 'Bank Settlement Mandate Incomplete' },
+                  { value: 'Other', label: 'Other (Specify below)' },
+                ]}
+              />
+            </div>
+            {holdReason === 'Other' && (
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 6, color: isDarkMode ? '#cbd5e1' : '#334155' }}>
+                  Custom Reason Title <span style={{ color: '#fa8c16' }}>*</span>
+                </label>
+                <Input
+                  disabled={isProcessingStatus}
+                  value={customHoldReason}
+                  onChange={(e) => setCustomHoldReason(e.target.value)}
+                  placeholder="e.g. Under review by regional compliance team"
+                />
+              </div>
+            )}
+            <div style={{ marginBottom: 18 }}>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 6, color: isDarkMode ? '#cbd5e1' : '#334155' }}>
+                Hold Instructions / Feedback <span style={{ color: '#fa8c16' }}>*</span>
+              </label>
+              <TextArea
+                rows={4}
+                disabled={isProcessingStatus}
+                value={holdNotes}
+                onChange={(e) => setHoldNotes(e.target.value)}
+                placeholder="e.g. Please upload trade license with clear stamp, update opening hours..."
+              />
+            </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
               <Button disabled={isProcessingStatus} onClick={() => setIsHoldModalOpen(false)}>Cancel</Button>
               <Button
                 type="primary"
                 loading={isProcessingStatus}
-                disabled={isProcessingStatus}
-                onClick={() => handleHold(selectedGym, holdNotes)}
+                disabled={isProcessingStatus || (!holdNotes.trim() && !holdReason)}
+                onClick={() => handleHold(selectedGym, holdReason === 'Other' ? customHoldReason : holdReason, holdNotes)}
                 style={{ fontWeight: 600, backgroundColor: '#fa8c16', borderColor: '#fa8c16' }}
               >
                 Confirm Hold
@@ -1435,28 +1889,65 @@ export const GymsManagement = () => {
           maskClosable={!isProcessingStatus}
           footer={null}
           centered
-          width={480}
+          width={520}
         >
           <div style={{ padding: '12px 0' }}>
-            <p style={{ fontSize: 13, color: isDarkMode ? '#aaaaaa' : '#64748b', marginBottom: 12 }}>
+            <p style={{ fontSize: 13, color: isDarkMode ? '#aaaaaa' : '#64748b', marginBottom: 14 }}>
               Please specify the reason for rejecting changes submitted by <strong>{selectedGym?.requestedBy || selectedGym?.ownerName || 'Gym Partner'}</strong>:
             </p>
-            <TextArea
-              rows={4}
-              disabled={isProcessingStatus}
-              value={rejectionReason}
-              onChange={(e) => setRejectionReason(e.target.value)}
-              placeholder="e.g. Photo resolution too low, pricing does not adhere to platform standard..."
-              style={{ marginBottom: 18 }}
-            />
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 6, color: isDarkMode ? '#cbd5e1' : '#334155' }}>
+                Reason for Rejection <span style={{ color: '#ef4444' }}>*</span>
+              </label>
+              <Select
+                value={rejectionReason}
+                onChange={(val) => setRejectionReason(val)}
+                style={{ width: '100%' }}
+                options={[
+                  { value: 'Incomplete / Blurred Documents', label: 'Incomplete / Blurred Documents (Trade License, PAN, GST)' },
+                  { value: 'Facility Photos Inadequate or Low Resolution', label: 'Facility Photos Inadequate or Low Resolution' },
+                  { value: 'Pricing & Package Discrepancy', label: 'Pricing & Package Discrepancy' },
+                  { value: 'Bank Account & Settlement Verification Failed', label: 'Bank Account & Settlement Verification Failed' },
+                  { value: 'Location / Geolocation Coordinates Mismatch', label: 'Location / Geolocation Coordinates Mismatch' },
+                  { value: 'Safety & Compliance Standards Not Met', label: 'Safety & Compliance Standards Not Met' },
+                  { value: 'Inaccurate Business Information', label: 'Inaccurate Business Information' },
+                  { value: 'Other', label: 'Other (Specify below)' },
+                ]}
+              />
+            </div>
+            {rejectionReason === 'Other' && (
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 6, color: isDarkMode ? '#cbd5e1' : '#334155' }}>
+                  Custom Reason Title <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                <Input
+                  disabled={isProcessingStatus}
+                  value={customRejectionReason}
+                  onChange={(e) => setCustomRejectionReason(e.target.value)}
+                  placeholder="e.g. Missing fire clearance certificate"
+                />
+              </div>
+            )}
+            <div style={{ marginBottom: 18 }}>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 6, color: isDarkMode ? '#cbd5e1' : '#334155' }}>
+                Rejection Note / Feedback for Gym Partner <span style={{ color: '#ef4444' }}>*</span>
+              </label>
+              <TextArea
+                rows={4}
+                disabled={isProcessingStatus}
+                value={rejectionNote}
+                onChange={(e) => setRejectionNote(e.target.value)}
+                placeholder="e.g. Photo resolution too low, pricing does not adhere to platform standard..."
+              />
+            </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
               <Button disabled={isProcessingStatus} onClick={() => setIsRejectModalOpen(false)}>Cancel</Button>
               <Button
                 danger
                 type="primary"
                 loading={isProcessingStatus}
-                disabled={isProcessingStatus}
-                onClick={() => handleReject(selectedGym, rejectionReason)}
+                disabled={isProcessingStatus || (!rejectionNote.trim() && !rejectionReason)}
+                onClick={() => handleReject(selectedGym, rejectionReason === 'Other' ? customRejectionReason : rejectionReason, rejectionNote)}
                 style={{ fontWeight: 600 }}
               >
                 Confirm Rejection
@@ -1560,26 +2051,6 @@ export const GymsManagement = () => {
             {getHeaderSubtitle()}
           </Text>
         </div>
-
-        <div style={{ display: 'flex', gap: 10 }}>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => navigate('/admin/onboarding', { state: { reset: true } })}
-            style={{
-              height: 40,
-              padding: '0 18px',
-              borderRadius: 'var(--radius-base)',
-              backgroundColor: '#4338ca',
-              borderColor: '#4338ca',
-              fontWeight: 700,
-              fontSize: 14,
-              boxShadow: '0 4px 14px rgba(67, 56, 202, 0.35)',
-            }}
-          >
-            Add New Gym
-          </Button>
-        </div>
       </div>
 
       {/* 2. Filter Bar */}
@@ -1593,7 +2064,7 @@ export const GymsManagement = () => {
         styles={{ body: { padding: '18px 20px' } }}
       >
         <Row gutter={[14, 14]}>
-          <Col xs={24} sm={12} lg={6}>
+          <Col xs={24} sm={12} lg={7}>
             <div style={{ fontSize: 12, fontWeight: 600, color: isDarkMode ? '#cccccc' : '#334155', marginBottom: 6 }}>
               Gym Name
             </div>
@@ -1605,19 +2076,6 @@ export const GymsManagement = () => {
               style={{ height: 38, borderRadius: 'var(--radius-base)' }}
               allowClear
             />
-          </Col>
-
-          <Col xs={24} sm={12} lg={4}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: isDarkMode ? '#cccccc' : '#334155', marginBottom: 6 }}>
-              Approval Status
-            </div>
-            <Select value={searchStatus} onChange={setSearchStatus} style={{ width: '100%', height: 38 }}>
-              <Option value="All">All Status</Option>
-              <Option value="Approved">Approved</Option>
-              <Option value="Pending Approval">Pending Approval</Option>
-              <Option value="Rejected">Rejected</Option>
-              <Option value="On Hold">On Hold</Option>
-            </Select>
           </Col>
 
           <Col xs={24} sm={12} lg={5}>
@@ -1633,7 +2091,7 @@ export const GymsManagement = () => {
             </Select>
           </Col>
 
-          <Col xs={24} sm={12} lg={5}>
+          <Col xs={24} sm={12} lg={6}>
             <div style={{ fontSize: 12, fontWeight: 600, color: isDarkMode ? '#cccccc' : '#334155', marginBottom: 6 }}>
               Location / City
             </div>
@@ -1647,7 +2105,7 @@ export const GymsManagement = () => {
             />
           </Col>
 
-          <Col xs={24} sm={12} lg={4}>
+          <Col xs={24} sm={12} lg={6}>
             <div style={{ fontSize: 12, fontWeight: 600, color: isDarkMode ? '#cccccc' : '#334155', marginBottom: 6 }}>
               Phone Number
             </div>

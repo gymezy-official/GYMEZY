@@ -1,6 +1,19 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { BANKS, getBankByName } from '../utils/bankData';
 import {
+  stripEmojis,
+  containsEmoji,
+  validateEmail,
+  validatePhone,
+  validateUpiId,
+  validatePersonName,
+  validatePassword,
+  validatePostalCode,
+  validateAccountNumber,
+  validateConfirmAccountNumber,
+  MEDIA_FIELDS,
+} from '../utils/validationUtils';
+import {
   Row,
   Col,
   Input,
@@ -13,6 +26,9 @@ import {
   InputNumber,
   Switch,
   Checkbox,
+  Radio,
+  Alert,
+  Card,
 } from 'antd';
 import {
   PictureOutlined,
@@ -38,10 +54,21 @@ import {
   FilePdfOutlined,
   FileTextOutlined,
   SafetyCertificateOutlined,
+  ShopOutlined,
+  CreditCardOutlined,
+  CheckCircleOutlined,
+  ExclamationCircleFilled,
+  FileProtectOutlined,
+  MobileOutlined,
+  StarFilled,
+  ThunderboltFilled,
+  WarningOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { useDispatch } from 'react-redux';
 import confetti from 'canvas-confetti';
 import { useTheme } from '../theme/ThemeContext';
+import { loginUser } from '../redux/slices/authSlice';
 import { apiClient } from '../services/apiClient';
 import gymezyLogo from '../assets/logo/gymezy.png';
 
@@ -130,12 +157,37 @@ const reverseGeocodeCoordinates = async (lat, lng) => {
 };
 
 const STEPS = [
-  { id: 1, title: 'Basic Info', key: 'basic' },
-  { id: 2, title: 'Location & Geolocation', key: 'location' },
+  { id: 1, title: 'Business Info', key: 'business' },
+  { id: 2, title: 'Location & Operating Hours', key: 'location' },
   { id: 3, title: 'Facilities & Photos', key: 'facilities' },
-  { id: 4, title: 'Pricing & Plans', key: 'pricing' },
-  { id: 5, title: 'Bank & Submit', key: 'bank' },
+  { id: 4, title: 'Workouts, Pricing & Rules', key: 'workouts' },
+  { id: 5, title: 'Bank Account & Review', key: 'bank' },
 ];
+
+const STEP_HEADERS = {
+  1: {
+    title: '1. Business & Legal Information',
+    desc: 'Provide basic business information, legal registration, and create administrator credentials.',
+  },
+  2: {
+    title: '2. Location, Geolocation & Operating Hours',
+    desc: 'Pinpoint your exact facility address with live geolocation and configure operating shift timings.',
+  },
+  3: {
+    title: '3. Facilities, Amenities & Floor Space',
+    desc: 'Define floor area, capacity, highlight badge, brand logo, and facility equipment.',
+  },
+  4: {
+    title: '4. Workouts, Pricing, Rules & Safety',
+    desc: 'Configure fitness disciplines, membership tiers, facility guidelines, and safety protocols.',
+  },
+  5: {
+    title: '5. Bank Account & Final Review',
+    desc: 'Provide settlement bank account details, review registration overview, and submit for Super Admin approval.',
+  },
+};
+
+const BADGE_OPTIONS = ['Trending', 'Top Rated', 'Verified SuperGym', 'Popular', 'Premium Club', '24/7 Access', 'CrossFit Ready'];
 
 const FACILITY_OPTIONS = [
   'AC Gym',
@@ -196,10 +248,47 @@ const DEFAULT_SAFETY = [
 ];
 
 const STEP_FIELDS = {
-  1: ['subscriptionType', 'gymName', 'ownerName', 'phone', 'email', 'password', 'confirmPassword', 'gstNumber', 'panNumber'],
-  2: ['address', 'area', 'city', 'state', 'pincode'],
+  1: ['subscriptionType', 'gymName', 'tagline', 'ownerName', 'phone', 'email', 'password', 'confirmPassword', 'gstNumber', 'panNumber'],
+  2: ['address', 'area', 'city', 'state', 'pincode', 'landmark'],
+  3: ['floorSpaceSqFt', 'maxFloorCapacity', 'logo', 'facilities', 'aboutText'],
   4: ['workouts', 'monthlyPrice'],
-  5: ['accountHolder', 'bankName', 'accountNumber', 'confirmAccountNumber', 'ifscCode', 'agreedToTerms'],
+  5: ['accountHolder', 'bankName', 'accountNumber', 'confirmAccountNumber', 'ifscCode', 'upiId', 'agreedToTerms'],
+};
+
+const STEP_REQUIRED_FIELDS = {
+  1: [
+    { field: 'subscriptionType', label: 'Subscription Plan' },
+    { field: 'gymName', label: 'Gym / Studio Name' },
+    { field: 'ownerName', label: 'Owner / MD Name' },
+    { field: 'phone', label: 'Mobile Number' },
+    { field: 'email', label: 'Official Email' },
+    { field: 'password', label: 'Password' },
+  ],
+  2: [
+    { field: 'address', label: 'Street Address' },
+    { field: 'area', label: 'Area / Locality' },
+    { field: 'city', label: 'City' },
+    { field: 'state', label: 'State' },
+    { field: 'pincode', label: 'Pincode' },
+  ],
+  3: [
+    { field: 'floorSpaceSqFt', label: 'Floor Space' },
+    { field: 'maxFloorCapacity', label: 'Max Capacity' },
+    { field: 'logo', label: 'Gym Logo' },
+    { field: 'facilities', label: 'Facilities (Min 1)' },
+  ],
+  4: [
+    { field: 'workouts', label: 'Workouts (Min 1)' },
+    { field: 'monthlyPrice', label: 'Monthly Pass Price' },
+  ],
+  5: [
+    { field: 'accountHolder', label: 'Account Holder Name' },
+    { field: 'bankName', label: 'Bank Name' },
+    { field: 'accountNumber', label: 'Account Number' },
+    { field: 'confirmAccountNumber', label: 'Confirm Account Number' },
+    { field: 'ifscCode', label: 'IFSC Code' },
+    { field: 'agreedToTerms', label: 'Terms & Conditions' },
+  ],
 };
 
 // Pure validator function
@@ -210,29 +299,21 @@ const validateField = (field, value, form) => {
       return '';
     case 'gymName':
       if (!value || !value.trim()) return 'Gym / Studio name is required';
+      if (containsEmoji(value)) return 'Emojis are not allowed in Gym / Studio name';
       if (value.trim().length < 2) return 'Must be at least 2 characters';
+      return '';
+    case 'tagline':
+      if (value && containsEmoji(value)) return 'Emojis are not allowed in Tagline';
       return '';
     case 'ownerName':
-      if (!value || !value.trim()) return 'Owner / MD name is required';
-      if (value.trim().length < 2) return 'Must be at least 2 characters';
-      return '';
+      return validatePersonName(value, 'Owner / MD name', 2, 100);
     case 'phone':
-      if (!value || !value.trim()) return 'Mobile number is required';
-      if (!/^\d{10}$/.test(value.trim())) return 'Must be a valid 10-digit mobile number';
-      return '';
+      return validatePhone(value);
     case 'email':
-      if (!value || !value.trim()) return 'Email address is required';
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())) return 'Enter a valid email (e.g. owner@gym.com)';
-      return '';
-    case 'password': {
+      return validateEmail(value);
+    case 'password':
       if (form?.isGoogleSso) return '';
-      if (!value) return 'Password is required';
-      if (value.length < 8 || value.length > 16) return 'Must be 8 to 16 characters';
-      if (!/[A-Z]/.test(value)) return 'Must contain at least 1 uppercase letter';
-      if (!/\d/.test(value)) return 'Must contain at least 1 number';
-      if (!/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?`~]/.test(value)) return 'Must contain 1 special character';
-      return '';
-    }
+      return validatePassword(value, { name: form?.ownerName, email: form?.email, phone: form?.phone });
     case 'confirmPassword':
       if (form?.isGoogleSso) return '';
       if (!value) return 'Please confirm your password';
@@ -250,21 +331,29 @@ const validateField = (field, value, form) => {
       return '';
     case 'address':
       if (!value || !value.trim()) return 'Street address is required';
+      if (containsEmoji(value)) return 'Emojis are not allowed in address';
       if (value.trim().length < 5) return 'Enter full street address (min 5 characters)';
       return '';
     case 'area':
       if (!value || !value.trim()) return 'Area / Locality is required';
+      if (containsEmoji(value)) return 'Emojis are not allowed in Area / Locality';
       return '';
     case 'city':
       if (!value || !value.trim()) return 'City is required';
+      if (containsEmoji(value)) return 'Emojis are not allowed in City';
       return '';
     case 'state':
       if (!value || !value.trim()) return 'State is required';
+      if (containsEmoji(value)) return 'Emojis are not allowed in State';
+      return '';
+    case 'landmark':
+      if (value && containsEmoji(value)) return 'Emojis are not allowed in Landmark';
+      return '';
+    case 'aboutText':
+      if (value && containsEmoji(value)) return 'Emojis are not allowed in description';
       return '';
     case 'pincode':
-      if (!value || !value.trim()) return 'Pincode is required';
-      if (!/^\d{6}$/.test(value.trim())) return 'Pincode must be exactly 6 digits';
-      return '';
+      return validatePostalCode(value);
     case 'floorSpaceSqFt':
       if (!value || Number(value) < 200) return 'Floor area must be at least 200 sq. ft.';
       if (Number(value) > 100000) return 'Floor area cannot exceed 100,000 sq. ft.';
@@ -287,22 +376,21 @@ const validateField = (field, value, form) => {
       return '';
     case 'accountHolder':
       if (!value || !value.trim()) return 'Account holder name is required';
+      if (containsEmoji(value)) return 'Emojis are not allowed in Account holder name';
       return '';
     case 'bankName':
       if (!value || !value.trim()) return 'Bank name is required';
       return '';
     case 'accountNumber':
-      if (!value || !value.trim()) return 'Account number is required';
-      if (value.trim().length < 8) return 'Account number must be at least 8 digits';
-      return '';
+      return validateAccountNumber(value);
     case 'confirmAccountNumber':
-      if (!value || !value.trim()) return 'Please confirm account number';
-      if (value.trim() !== form.accountNumber?.trim()) return 'Account numbers do not match';
-      return '';
+      return validateConfirmAccountNumber(value, form?.accountNumber);
     case 'ifscCode':
       if (!value || !value.trim()) return 'IFSC code is required';
       if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(value.trim())) return 'Invalid IFSC (e.g. HDFC0001234)';
       return '';
+    case 'upiId':
+      return validateUpiId(value);
     case 'agreedToTerms':
       if (!value) return 'You must accept the terms to proceed';
       return '';
@@ -320,7 +408,7 @@ const INITIAL_FORM_DATA = {
   password: '',
   confirmPassword: '',
   businessType: 'Private Limited',
-  yearEstablished: '2024',
+  yearEstablished: '',
   gstNumber: '',
   panNumber: '',
   branches: '1',
@@ -339,10 +427,15 @@ const INITIAL_FORM_DATA = {
   lat: null,
   lng: null,
   googleMapsUrl: '',
+  timingMode: 'REGULAR',
   weekdayOpen: '05:30 AM',
   weekdayClose: '10:30 PM',
   weekendOpen: '06:00 AM',
   weekendClose: '09:00 PM',
+  morningOpen: '05:30 AM',
+  morningClose: '11:30 AM',
+  eveningOpen: '04:30 PM',
+  eveningClose: '10:30 PM',
   isSplitShift: false,
   isOpenHolidays: true,
   is24Hours: false,
@@ -350,6 +443,7 @@ const INITIAL_FORM_DATA = {
   floorSpaceSqFt: 3500,
   maxFloorCapacity: 45,
   genderAllowed: 'Unisex',
+  badgeText: 'Trending',
   logo: '',
   coverPhoto: '',
   galleryPhotos: [],
@@ -369,7 +463,6 @@ const INITIAL_FORM_DATA = {
     '24/7 CCTV surveillance coverage',
   ],
   singleSessionPrice: 199,
-  weeklyPassPrice: 799,
   fiveSessionPrice: 899,
   monthlyPrice: 1999,
   quarterlyPrice: 4999,
@@ -379,7 +472,7 @@ const INITIAL_FORM_DATA = {
   refundPercentage: 100,
   rescheduleAllowedCount: 2,
 
-  subscriptionType: 'Listing Only',
+  subscriptionType: 'Hybrid',
   commissionRate: 10,
   settlementCycle: 'Daily (T+1)',
   accountHolder: '',
@@ -392,9 +485,31 @@ const INITIAL_FORM_DATA = {
   agreedToTerms: false,
 };
 
+const parse12HourTime = (value) => {
+  const match = String(value || '').trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!match) return '';
+  let hours = Number(match[1]);
+  const minutes = match[2];
+  const period = match[3].toUpperCase();
+  if (hours === 12) hours = 0;
+  if (period === 'PM') hours += 12;
+  return `${String(hours).padStart(2, '0')}:${minutes}`;
+};
+
+const format24HourTime = (value) => {
+  const [hoursValue, minutes = '00'] = String(value || '').split(':');
+  let hours = Number(hoursValue);
+  if (!Number.isInteger(hours) || hours < 0 || hours > 23) return '';
+  const period = hours >= 12 ? 'PM' : 'AM';
+  hours %= 12;
+  if (hours === 0) hours = 12;
+  return `${String(hours).padStart(2, '0')}:${minutes} ${period}`;
+};
+
 export const Register = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const dispatch = useDispatch();
   const { isDarkMode, toggleTheme } = useTheme();
 
   // Google SSO Onboarding State passed from Login redirect
@@ -403,8 +518,6 @@ export const Register = () => {
 
   const [currentStep, setCurrentStep] = useState(1);
   const [submitting, setSubmitting] = useState(false);
-  const [isSuccess, setIsSuccess] = useState(false);
-  const [registeredGymData, setRegisteredGymData] = useState(null);
 
   // GPS Auto-detect loading state and pinned visibility state
   const [isFetchingGps, setIsFetchingGps] = useState(false);
@@ -420,7 +533,6 @@ export const Register = () => {
   const resetForm = () => {
     setFormData({ ...INITIAL_FORM_DATA });
     setCurrentStep(1);
-    setErrors({});
     setTouched({});
     setNewRuleInput('');
     setNewSafetyInput('');
@@ -429,6 +541,20 @@ export const Register = () => {
     setPhoneCheckStatus('idle');
     setPhoneCheckError('');
     setIsGpsPinned(false);
+  };
+
+  // Restrict keyboard input strictly to numeric digits for numeric fields
+  const handleNumericKeyDown = (e) => {
+    if (
+      ['Backspace', 'Delete', 'Tab', 'Escape', 'Enter', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key) ||
+      e.ctrlKey ||
+      e.metaKey
+    ) {
+      return;
+    }
+    if (!/^[0-9]$/.test(e.key)) {
+      e.preventDefault();
+    }
   };
 
   useEffect(() => {
@@ -580,8 +706,17 @@ export const Register = () => {
   }, [formData, emailCheckError]);
 
   const updateField = (field, value) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
+    const sanitized = typeof value === 'string' && !MEDIA_FIELDS.has(field) ? stripEmojis(value) : value;
+    setFormData((prev) => ({ ...prev, [field]: sanitized }));
     setTouched((prev) => ({ ...prev, [field]: true }));
+  };
+
+  const updateFields = (fieldsObj) => {
+    const sanitizedObj = {};
+    for (const [k, v] of Object.entries(fieldsObj)) {
+      sanitizedObj[k] = typeof v === 'string' && !MEDIA_FIELDS.has(k) ? stripEmojis(v) : v;
+    }
+    setFormData((prev) => ({ ...prev, ...sanitizedObj }));
   };
 
   const markFieldTouched = (field) => {
@@ -673,10 +808,40 @@ export const Register = () => {
     match: formData.password === formData.confirmPassword && formData.confirmPassword.length > 0,
   };
 
+  const getStepValidationStatus = (stepId) => {
+    const required = STEP_REQUIRED_FIELDS[stepId] || [];
+    const missing = required.filter(({ field }) => {
+      if (isGoogleSso && (field === 'password' || field === 'confirmPassword')) return false;
+      const val = formData[field];
+      if (Array.isArray(val)) return !val || val.length === 0;
+      if (!val || String(val).trim() === '') return true;
+      return validateField(field, val, formData) !== '';
+    });
+    return {
+      isValid: missing.length === 0,
+      missingCount: missing.length,
+      missingFields: missing,
+    };
+  };
+
+  const validationSummary = useMemo(() => {
+    const statusMap = {};
+    let totalMissing = 0;
+    for (let i = 1; i <= 5; i++) {
+      const st = getStepValidationStatus(i);
+      statusMap[i] = st;
+      totalMissing += st.missingCount;
+    }
+    return {
+      statusMap,
+      totalMissing,
+      isAllValid: totalMissing === 0,
+    };
+  }, [formData, isGoogleSso]);
+
   // Check step validity
   const isStepValid = (step) => {
-    const fields = STEP_FIELDS[step] || [];
-    return fields.every((f) => !errors[f]);
+    return getStepValidationStatus(step).isValid;
   };
 
   const handleNext = async () => {
@@ -730,9 +895,16 @@ export const Register = () => {
       }
     }
 
-    if (hasError) {
+    const stepStatus = getStepValidationStatus(currentStep);
+    if (!stepStatus.isValid || hasError) {
       const firstError = currentFields.find((f) => errors[f]);
-      message.error(errors[firstError] || 'Please complete all required fields.');
+      if (firstError && errors[firstError]) {
+        message.error(errors[firstError]);
+      } else if (stepStatus.missingFields && stepStatus.missingFields.length > 0) {
+        message.error(`Please provide ${stepStatus.missingFields[0].label}`);
+      } else {
+        message.error('Please complete all required fields.');
+      }
       return;
     }
 
@@ -747,9 +919,9 @@ export const Register = () => {
 
   const handleBusinessDocUpload = async (file) => {
     try {
-      const isLt10M = file.size / 1024 / 1024 < 10;
-      if (!isLt10M) {
-        message.error('Document size must be less than 10MB');
+      const isLt1M = file.size / 1024 / 1024 < 1;
+      if (!isLt1M) {
+        message.error('Document size must be less than 1MB');
         return false;
       }
       const b64 = await fileToBase64(file);
@@ -770,8 +942,23 @@ export const Register = () => {
     return false;
   };
 
+  const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
+  const isAllowedImageFile = (file) => {
+    if (!file) return false;
+    if (file.type && ALLOWED_IMAGE_TYPES.has(file.type.toLowerCase())) return true;
+    return /\.(jpe?g|png|webp)$/i.test(file.name || '');
+  };
+
   const handleLogoUpload = async (file) => {
     try {
+      if (!isAllowedImageFile(file)) {
+        message.error('Only image files (JPG, PNG, WEBP) are allowed.');
+        return false;
+      }
+      if (file.size > 1024 * 1024) {
+        message.error('Logo image must be less than 1MB.');
+        return false;
+      }
       const b64 = await fileToBase64(file);
       updateField('logo', b64);
       message.success('Brand logo uploaded.');
@@ -783,6 +970,14 @@ export const Register = () => {
 
   const handleCoverUpload = async (file) => {
     try {
+      if (!isAllowedImageFile(file)) {
+        message.error('Only image files (JPG, PNG, WEBP) are allowed.');
+        return false;
+      }
+      if (file.size > 1024 * 1024) {
+        message.error('Cover photo must be less than 1MB.');
+        return false;
+      }
       const b64 = await fileToBase64(file);
       updateField('coverPhoto', b64);
       message.success('Cover photo uploaded.');
@@ -794,6 +989,14 @@ export const Register = () => {
 
   const handleFacilityPhotoUpload = async (file) => {
     try {
+      if (!isAllowedImageFile(file)) {
+        message.error('Only image files (JPG, PNG, WEBP) are allowed.');
+        return false;
+      }
+      if (file.size > 1024 * 1024) {
+        message.error('Facility photo must be less than 1MB.');
+        return false;
+      }
       const b64 = await fileToBase64(file);
       setFormData((prev) => ({
         ...prev,
@@ -814,18 +1017,19 @@ export const Register = () => {
   };
 
   const handleSubmitRegistration = async () => {
-    const step5Fields = STEP_FIELDS[5];
-    const newTouched = { ...touched };
-    let hasError = false;
-    for (const f of step5Fields) {
-      newTouched[f] = true;
-      if (errors[f]) hasError = true;
+    if (!validationSummary.isAllValid) {
+      for (let i = 1; i <= 5; i++) {
+        if (!validationSummary.statusMap[i]?.isValid) {
+          message.error(`Please complete all required fields in Step ${i}: ${STEPS[i - 1].title}`);
+          setCurrentStep(i);
+          return;
+        }
+      }
     }
-    setTouched(newTouched);
 
-    if (hasError) {
-      const firstError = step5Fields.find((f) => errors[f]);
-      message.error(errors[firstError] || 'Please review your bank & agreement details.');
+    if (!formData.agreedToTerms) {
+      message.error('You must accept the terms to proceed');
+      markFieldTouched('agreedToTerms');
       return;
     }
 
@@ -859,17 +1063,37 @@ export const Register = () => {
         lng: Number(formData.lng) || 80.2707,
         googleMapsUrl: formData.googleMapsUrl.trim() || `https://maps.google.com/?q=${formData.lat},${formData.lng}`,
 
+        timingMode: formData.timingMode || 'REGULAR',
         weekdayOpen: formData.weekdayOpen,
         weekdayClose: formData.weekdayClose,
         weekendOpen: formData.weekendOpen,
         weekendClose: formData.weekendClose,
-        isSplitShift: formData.isSplitShift,
-        isOpenHolidays: formData.isOpenHolidays,
-        is24Hours: formData.is24Hours,
+        morningOpen: formData.morningOpen || '05:30 AM',
+        morningClose: formData.morningClose || '11:30 AM',
+        eveningOpen: formData.eveningOpen || '04:30 PM',
+        eveningClose: formData.eveningClose || '10:30 PM',
+        isSplitShift: formData.timingMode === 'SPLIT_SHIFT',
+        isOpenHolidays: formData.isOpenHolidays !== false,
+        is24Hours: formData.timingMode === '24_HOURS',
+        openingHours: {
+          mode: formData.timingMode || 'REGULAR',
+          weekdayOpen: formData.weekdayOpen,
+          weekdayClose: formData.weekdayClose,
+          weekendOpen: formData.weekendOpen,
+          weekendClose: formData.weekendClose,
+          morningOpen: formData.morningOpen || '05:30 AM',
+          morningClose: formData.morningClose || '11:30 AM',
+          eveningOpen: formData.eveningOpen || '04:30 PM',
+          eveningClose: formData.eveningClose || '10:30 PM',
+          isSplitShift: formData.timingMode === 'SPLIT_SHIFT',
+          isOpenHolidays: formData.isOpenHolidays !== false,
+          is24Hours: formData.timingMode === '24_HOURS',
+        },
 
         floorSpaceSqFt: Number(formData.floorSpaceSqFt),
         maxFloorCapacity: Number(formData.maxFloorCapacity),
         genderAllowed: formData.genderAllowed,
+        badgeText: formData.badgeText || 'Trending',
         logo: formData.logo,
         coverPhoto: formData.coverPhoto || formData.logo,
         galleryPhotos: formData.galleryPhotos || [],
@@ -882,7 +1106,6 @@ export const Register = () => {
         aboutText: formData.aboutText,
 
         singleSessionPrice: Number(formData.singleSessionPrice),
-        weeklyPassPrice: Number(formData.weeklyPassPrice),
         fiveSessionPrice: Number(formData.fiveSessionPrice),
         monthlyPrice: Number(formData.monthlyPrice),
         quarterlyPrice: Number(formData.quarterlyPrice),
@@ -910,19 +1133,32 @@ export const Register = () => {
       const res = await apiClient.post('/gyms/register', payload);
 
       if (res.data?.success) {
-        setRegisteredGymData({
-          ...res.data.data,
-          gymName: formData.gymName,
-          ownerName: formData.ownerName,
-          email: formData.email,
-        });
-        setIsSuccess(true);
-        resetForm();
         confetti({
           particleCount: 100,
           spread: 70,
           origin: { y: 0.6 },
         });
+
+        try {
+          if (!isGoogleSso && formData.email && formData.password) {
+            await dispatch(
+              loginUser({
+                identifier: formData.email.trim().toLowerCase(),
+                password: formData.password,
+              })
+            ).unwrap();
+            resetForm();
+            message.success('Application submitted! Redirecting to your application status.');
+            navigate('/application-status', { replace: true });
+            return;
+          }
+        } catch {
+          // Fall through to login redirect if auto-login fails
+        }
+
+        resetForm();
+        message.success('Application submitted! Please sign in to track your application status.');
+        navigate('/login', { replace: true });
       } else {
         message.error(res.data?.message || 'Registration failed. Please review your details.');
       }
@@ -942,6 +1178,7 @@ export const Register = () => {
     const isFieldValid = isFieldTouched && !errors[field] && formData[field];
 
     return {
+      width: '100%',
       height: 44,
       borderRadius: 8,
       backgroundColor: isDarkMode ? '#121214' : '#ffffff',
@@ -988,127 +1225,6 @@ export const Register = () => {
     }
     return null;
   };
-
-  if (isSuccess) {
-    return (
-      <div
-        style={{
-          minHeight: '100vh',
-          backgroundColor: isDarkMode ? '#09090b' : '#f8fafc',
-          color: isDarkMode ? '#ffffff' : '#0f172a',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: 24,
-        }}
-      >
-        <div
-          style={{
-            maxWidth: 580,
-            width: '100%',
-            borderRadius: 16,
-            backgroundColor: isDarkMode ? '#121214' : '#ffffff',
-            border: `1px solid ${isDarkMode ? '#27272a' : '#e2e8f0'}`,
-            padding: '40px 32px',
-            textAlign: 'center',
-            boxShadow: '0 10px 30px rgba(0,0,0,0.06)',
-          }}
-        >
-          <div
-            style={{
-              width: 64,
-              height: 64,
-              borderRadius: '50%',
-              backgroundColor: '#e6f4ea',
-              color: '#16a34a',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: 32,
-              marginBottom: 16,
-            }}
-          >
-            <CheckCircleFilled />
-          </div>
-
-          <h2 style={{ fontSize: 22, fontWeight: 800, margin: '0 0 8px 0' }}>
-            Application Submitted for Approval
-          </h2>
-
-          <p style={{ color: '#64748b', fontSize: 14, lineHeight: 1.5, margin: '0 0 24px 0' }}>
-            Thank you for registering <strong>{registeredGymData?.gymName || 'your gym'}</strong>. Your gym profile and facility photos have been routed to the GYMEZY Super Admin review desk.
-          </p>
-
-          <div
-            style={{
-              backgroundColor: isDarkMode ? '#18181b' : '#f8fafc',
-              border: `1px solid ${isDarkMode ? '#27272a' : '#e2e8f0'}`,
-              borderRadius: 12,
-              padding: '16px 20px',
-              marginBottom: 24,
-              textAlign: 'left',
-            }}
-          >
-            <Row gutter={[16, 12]}>
-              <Col span={12}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                  Partner Ref ID
-                </div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: '#003882', marginTop: 2 }}>
-                  {registeredGymData?.partnerId || registeredGymData?.gymId || 'GYM-REG'}
-                </div>
-              </Col>
-              <Col span={12}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                  Initial Publication Status
-                </div>
-                <div style={{ marginTop: 2 }}>
-                  <Tag color="warning" style={{ fontWeight: 700, borderRadius: 6 }}>
-                    Pending Approval
-                  </Tag>
-                </div>
-              </Col>
-              <Col span={12}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                  Owner Name
-                </div>
-                <div style={{ fontSize: 14, fontWeight: 600, marginTop: 2 }}>
-                  {registeredGymData?.ownerName || '-'}
-                </div>
-              </Col>
-              <Col span={12}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                  Login Email
-                </div>
-                <div style={{ fontSize: 14, fontWeight: 600, marginTop: 2 }}>
-                  {registeredGymData?.email || '-'}
-                </div>
-              </Col>
-            </Row>
-          </div>
-
-          <Button
-            type="primary"
-            size="large"
-            block
-            onClick={() => {
-              resetForm();
-              navigate('/login');
-            }}
-            style={{
-              height: 46,
-              backgroundColor: '#003882',
-              borderColor: '#003882',
-              fontWeight: 700,
-              borderRadius: 8,
-            }}
-          >
-            Back to Sign In
-          </Button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div
@@ -1216,25 +1332,29 @@ export const Register = () => {
           </div>
 
           {/* Minimal 5-segment track */}
-          <div style={{ display: 'flex', gap: 6, height: 5 }}>
-            {STEPS.map((s) => (
-              <div
-                key={s.id}
-                style={{
-                  flex: 1,
-                  borderRadius: 3,
-                  backgroundColor:
-                    s.id < currentStep
+          <div key={`step-track-${STEPS.length}-${currentStep}`} style={{ display: 'flex', gap: 6, height: 5 }}>
+            {STEPS.map((s, idx) => {
+              const stepIndex = idx + 1;
+              const isPast = stepIndex < currentStep;
+              const isCurrent = stepIndex === currentStep;
+              return (
+                <div
+                  key={s.key || s.id}
+                  style={{
+                    flex: 1,
+                    borderRadius: 3,
+                    backgroundColor: isPast
                       ? '#10b981'
-                      : s.id === currentStep
+                      : isCurrent
                       ? '#003882'
                       : isDarkMode
                       ? '#27272a'
                       : '#e2e8f0',
-                  transition: 'background-color 0.3s ease',
-                }}
-              />
-            ))}
+                    transition: 'background-color 0.3s ease',
+                  }}
+                />
+              );
+            })}
           </div>
         </div>
 
@@ -1249,18 +1369,10 @@ export const Register = () => {
               letterSpacing: '-0.3px',
             }}
           >
-            {currentStep === 1 && "Let's start with your gym details"}
-            {currentStep === 2 && 'Location, Geolocation & Operating Hours'}
-            {currentStep === 3 && 'Facilities, Amenities & Photos'}
-            {currentStep === 4 && 'Workout Disciplines & Membership Pricing'}
-            {currentStep === 5 && 'Bank Account & Review'}
+            {STEP_HEADERS[currentStep]?.title || ''}
           </h1>
           <p style={{ fontSize: 14, color: '#64748b', margin: 0 }}>
-            {currentStep === 1 && 'Provide basic business information and create your administrator login credentials.'}
-            {currentStep === 2 && 'Pinpoint your exact facility address with live geolocation and define regular operating hours.'}
-            {currentStep === 3 && 'Upload brand logo, cover photo, and high quality facility & equipment photos.'}
-            {currentStep === 4 && 'Set your walk-in single session pass price and optional recurring membership tiers.'}
-            {currentStep === 5 && 'Provide your settlement bank account. Your application will be submitted for Super Admin review.'}
+            {STEP_HEADERS[currentStep]?.desc || ''}
           </p>
         </div>
 
@@ -1384,22 +1496,24 @@ export const Register = () => {
                   <Input
                     value={formData.tagline}
                     onChange={(e) => updateField('tagline', e.target.value)}
+                    onBlur={() => markFieldTouched('tagline')}
                     style={getInputStyle('tagline')}
                   />
+                  {renderFieldError('tagline')}
                 </Col>
 
                 <Col xs={24} sm={12}>
                   <label style={labelStyle}>Number of Branches</label>
-                  <Select
+                  <Input
+                    placeholder="e.g. 1"
+                    inputMode="numeric"
+                    maxLength={4}
                     value={formData.branches}
-                    onChange={(val) => updateField('branches', val)}
-                    style={{ width: '100%', height: 44 }}
-                  >
-                    <Option value="1">1 (Single Facility)</Option>
-                    <Option value="2-5">2 – 5 Branches</Option>
-                    <Option value="6-10">6 – 10 Branches</Option>
-                    <Option value="10+">10+ Chain Network</Option>
-                  </Select>
+                    onKeyDown={handleNumericKeyDown}
+                    onChange={(e) => updateField('branches', e.target.value.replace(/\D/g, ''))}
+                    onBlur={() => markFieldTouched('branches')}
+                    style={getInputStyle('branches')}
+                  />
                 </Col>
 
                 <Col xs={24} sm={12}>
@@ -1453,7 +1567,7 @@ export const Register = () => {
                           Click or drag document to upload
                         </p>
                         <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>
-                          PDF, PNG, or JPG up to 10MB (GST, Trade License, or Shop Act)
+                          PDF, PNG, or JPG up to 1MB (GST, Trade License, or Shop Act)
                         </p>
                       </Upload.Dragger>
                     ) : (
@@ -1591,7 +1705,9 @@ export const Register = () => {
                       ) : null
                     }
                     maxLength={10}
+                    inputMode="numeric"
                     value={formData.phone}
+                    onKeyDown={handleNumericKeyDown}
                     onChange={(e) => updateField('phone', e.target.value.replace(/\D/g, ''))}
                     onBlur={() => markFieldTouched('phone')}
                     style={{
@@ -1952,7 +2068,9 @@ export const Register = () => {
                   </label>
                   <Input
                     maxLength={6}
+                    inputMode="numeric"
                     value={formData.pincode}
+                    onKeyDown={handleNumericKeyDown}
                     onChange={(e) => updateField('pincode', e.target.value.replace(/\D/g, ''))}
                     onBlur={() => markFieldTouched('pincode')}
                     style={getInputStyle('pincode')}
@@ -1999,90 +2117,152 @@ export const Register = () => {
 
               <Divider style={{ margin: '24px 0 20px 0', borderColor: isDarkMode ? '#27272a' : '#f1f5f9' }} />
 
-              <div style={{ fontSize: 14, fontWeight: 700, color: isDarkMode ? '#ffffff' : '#0f172a', marginBottom: 16 }}>
-                Regular Operating Hours
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                <div style={{ fontSize: 15, fontWeight: 800, color: isDarkMode ? '#ffffff' : '#0f172a' }}>
+                  Facility Operating Hours & Shift Architecture
+                </div>
+                <Tag color={formData.timingMode === '24_HOURS' ? 'green' : (formData.timingMode === 'SPLIT_SHIFT' ? 'purple' : 'blue')}>
+                  {formData.timingMode === '24_HOURS' ? '24/7 Mode' : (formData.timingMode === 'SPLIT_SHIFT' ? 'Split Shift' : 'Regular Mode')}
+                </Tag>
               </div>
 
-              <Row gutter={[16, 16]}>
-                <Col xs={24} sm={12}>
-                  <label style={labelStyle}>Weekday Open (Mon – Fri)</label>
-                  <Select
-                    value={formData.weekdayOpen}
-                    onChange={(val) => updateField('weekdayOpen', val)}
-                    style={{ width: '100%', height: 44 }}
-                  >
-                    {['05:00 AM', '05:30 AM', '06:00 AM', '06:30 AM', '07:00 AM'].map((t) => (
-                      <Option key={t} value={t}>{t}</Option>
-                    ))}
-                  </Select>
-                </Col>
+              {/* Timing Mode Selector */}
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, color: isDarkMode ? '#cccccc' : '#334155' }}>
+                  Select Operational Timing Model
+                </div>
+                <Radio.Group
+                  value={formData.timingMode || 'REGULAR'}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    updateFields({
+                      timingMode: val,
+                      is24Hours: val === '24_HOURS',
+                      isSplitShift: val === 'SPLIT_SHIFT',
+                    });
+                  }}
+                  buttonStyle="solid"
+                  style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}
+                >
+                  <Radio.Button value="REGULAR" style={{ borderRadius: 8, height: 38, lineHeight: '36px' }}>
+                    Single Shift (Continuous 12h/16h)
+                  </Radio.Button>
+                  <Radio.Button value="SPLIT_SHIFT" style={{ borderRadius: 8, height: 38, lineHeight: '36px' }}>
+                    Split Shift (Morning + Evening)
+                  </Radio.Button>
+                  <Radio.Button value="24_HOURS" style={{ borderRadius: 8, height: 38, lineHeight: '36px' }}>
+                    24 Hours (Round-the-clock)
+                  </Radio.Button>
+                </Radio.Group>
+              </div>
 
-                <Col xs={24} sm={12}>
-                  <label style={labelStyle}>Weekday Close (Mon – Fri)</label>
-                  <Select
-                    value={formData.weekdayClose}
-                    onChange={(val) => updateField('weekdayClose', val)}
-                    style={{ width: '100%', height: 44 }}
-                  >
-                    {['09:00 PM', '09:30 PM', '10:00 PM', '10:30 PM', '11:00 PM', '11:30 PM'].map((t) => (
-                      <Option key={t} value={t}>{t}</Option>
-                    ))}
-                  </Select>
-                </Col>
+              {/* Mode-Specific Time Pickers */}
+              {(formData.timingMode === 'REGULAR' || !formData.timingMode) && (
+                <Row gutter={[16, 16]}>
+                  <Col xs={24} sm={12} md={6}>
+                    <label style={labelStyle}>Weekday Open (Mon – Fri)</label>
+                    <Input
+                      type="time"
+                      value={parse12HourTime(formData.weekdayOpen)}
+                      onChange={(e) => updateField('weekdayOpen', format24HourTime(e.target.value))}
+                      style={{ height: 40, borderRadius: 8 }}
+                    />
+                  </Col>
+                  <Col xs={24} sm={12} md={6}>
+                    <label style={labelStyle}>Weekday Close (Mon – Fri)</label>
+                    <Input
+                      type="time"
+                      value={parse12HourTime(formData.weekdayClose)}
+                      onChange={(e) => updateField('weekdayClose', format24HourTime(e.target.value))}
+                      style={{ height: 40, borderRadius: 8 }}
+                    />
+                  </Col>
+                  <Col xs={24} sm={12} md={6}>
+                    <label style={labelStyle}>Weekend Open (Sat – Sun)</label>
+                    <Input
+                      type="time"
+                      value={parse12HourTime(formData.weekendOpen)}
+                      onChange={(e) => updateField('weekendOpen', format24HourTime(e.target.value))}
+                      style={{ height: 40, borderRadius: 8 }}
+                    />
+                  </Col>
+                  <Col xs={24} sm={12} md={6}>
+                    <label style={labelStyle}>Weekend Close (Sat – Sun)</label>
+                    <Input
+                      type="time"
+                      value={parse12HourTime(formData.weekendClose)}
+                      onChange={(e) => updateField('weekendClose', format24HourTime(e.target.value))}
+                      style={{ height: 40, borderRadius: 8 }}
+                    />
+                  </Col>
+                </Row>
+              )}
 
-                <Col xs={24} sm={12}>
-                  <label style={labelStyle}>Weekend Open (Sat – Sun)</label>
-                  <Select
-                    value={formData.weekendOpen}
-                    onChange={(val) => updateField('weekendOpen', val)}
-                    style={{ width: '100%', height: 44 }}
-                  >
-                    {['05:30 AM', '06:00 AM', '06:30 AM', '07:00 AM', '08:00 AM'].map((t) => (
-                      <Option key={t} value={t}>{t}</Option>
-                    ))}
-                  </Select>
-                </Col>
+              {formData.timingMode === 'SPLIT_SHIFT' && (
+                <div>
+                  <div style={{ padding: '10px 14px', borderRadius: 8, backgroundColor: isDarkMode ? 'rgba(168,85,247,0.1)' : '#faf5ff', border: '1px solid #d8b4fe', marginBottom: 14, fontSize: 13, color: isDarkMode ? '#e9d5ff' : '#6b21a8' }}>
+                    <strong>Split Shift Model:</strong> Common for fitness studios in India. Gym opens for early morning routines, closes during the afternoon for sanitization/break, and reopens for evening workouts. Bookable slots are generated only during active shifts.
+                  </div>
+                  <Row gutter={[16, 16]}>
+                    <Col xs={24} sm={12} md={6}>
+                      <label style={labelStyle}>Morning Shift Open</label>
+                      <Input
+                        type="time"
+                        value={parse12HourTime(formData.morningOpen || '05:30 AM')}
+                        onChange={(e) => updateField('morningOpen', format24HourTime(e.target.value))}
+                        style={{ height: 40, borderRadius: 8 }}
+                      />
+                    </Col>
+                    <Col xs={24} sm={12} md={6}>
+                      <label style={labelStyle}>Morning Shift Close</label>
+                      <Input
+                        type="time"
+                        value={parse12HourTime(formData.morningClose || '11:30 AM')}
+                        onChange={(e) => updateField('morningClose', format24HourTime(e.target.value))}
+                        style={{ height: 40, borderRadius: 8 }}
+                      />
+                    </Col>
+                    <Col xs={24} sm={12} md={6}>
+                      <label style={labelStyle}>Evening Shift Open</label>
+                      <Input
+                        type="time"
+                        value={parse12HourTime(formData.eveningOpen || '04:30 PM')}
+                        onChange={(e) => updateField('eveningOpen', format24HourTime(e.target.value))}
+                        style={{ height: 40, borderRadius: 8 }}
+                      />
+                    </Col>
+                    <Col xs={24} sm={12} md={6}>
+                      <label style={labelStyle}>Evening Shift Close</label>
+                      <Input
+                        type="time"
+                        value={parse12HourTime(formData.eveningClose || '10:30 PM')}
+                        onChange={(e) => updateField('eveningClose', format24HourTime(e.target.value))}
+                        style={{ height: 40, borderRadius: 8 }}
+                      />
+                    </Col>
+                  </Row>
+                </div>
+              )}
 
-                <Col xs={24} sm={12}>
-                  <label style={labelStyle}>Weekend Close (Sat – Sun)</label>
-                  <Select
-                    value={formData.weekendClose}
-                    onChange={(val) => updateField('weekendClose', val)}
-                    style={{ width: '100%', height: 44 }}
-                  >
-                    {['08:00 PM', '08:30 PM', '09:00 PM', '09:30 PM', '10:00 PM'].map((t) => (
-                      <Option key={t} value={t}>{t}</Option>
-                    ))}
-                  </Select>
+              {formData.timingMode === '24_HOURS' && (
+                <div style={{ padding: '14px 18px', borderRadius: 8, backgroundColor: isDarkMode ? 'rgba(34,197,94,0.1)' : '#f0fdf4', border: '1px solid #86efac', marginBottom: 14, fontSize: 13, color: isDarkMode ? '#86efac' : '#166534' }}>
+                  <strong>24/7 Round-the-clock Facility:</strong> This gym operates continuously 24 hours a day, 7 days a week. Dynamic customer booking slots will be available around the clock.
+                </div>
+              )}
+
+              <Row gutter={[16, 16]} style={{ marginTop: 14 }}>
+                <Col xs={24} md={12}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <Switch
+                      checked={formData.isOpenHolidays !== false}
+                      onChange={(chk) => updateField('isOpenHolidays', chk)}
+                    />
+                    <span style={{ fontSize: 13, fontWeight: 700, color: isDarkMode ? '#ffffff' : '#0f172a' }}>
+                      Facility Remains Open on Public Holidays
+                    </span>
+                  </div>
                 </Col>
               </Row>
-
-              <div
-                style={{
-                  marginTop: 18,
-                  display: 'flex',
-                  gap: 24,
-                  flexWrap: 'wrap',
-                  alignItems: 'center',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: 13, fontWeight: 500 }}>Open on Public Holidays</span>
-                  <Switch
-                    size="small"
-                    checked={formData.isOpenHolidays}
-                    onChange={(checked) => updateField('isOpenHolidays', checked)}
-                  />
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: 13, fontWeight: 500 }}>24/7 Facility Access</span>
-                  <Switch
-                    size="small"
-                    checked={formData.is24Hours}
-                    onChange={(checked) => updateField('is24Hours', checked)}
-                  />
-                </div>
-              </div>
             </div>
           )}
 
@@ -2094,7 +2274,7 @@ export const Register = () => {
               </div>
 
               <Row gutter={[16, 16]}>
-                <Col xs={24} sm={8}>
+                <Col xs={24} sm={6}>
                   <label style={labelStyle}>
                     Floor Area (Sq. Ft.) <span style={{ color: '#ef4444' }}>*</span>
                   </label>
@@ -2103,12 +2283,14 @@ export const Register = () => {
                     max={50000}
                     value={formData.floorSpaceSqFt}
                     onChange={(val) => updateField('floorSpaceSqFt', val)}
+                    onKeyDown={handleNumericKeyDown}
+                    parser={(val) => (val ? String(val).replace(/\D/g, '') : '')}
                     style={{ width: '100%', height: 44, borderRadius: 8 }}
                   />
                   {renderFieldError('floorSpaceSqFt')}
                 </Col>
 
-                <Col xs={24} sm={8}>
+                <Col xs={24} sm={6}>
                   <label style={labelStyle}>
                     Max Slot Capacity <span style={{ color: '#ef4444' }}>*</span>
                   </label>
@@ -2117,12 +2299,14 @@ export const Register = () => {
                     max={300}
                     value={formData.maxFloorCapacity}
                     onChange={(val) => updateField('maxFloorCapacity', val)}
+                    onKeyDown={handleNumericKeyDown}
+                    parser={(val) => (val ? String(val).replace(/\D/g, '') : '')}
                     style={{ width: '100%', height: 44, borderRadius: 8 }}
                   />
                   {renderFieldError('maxFloorCapacity')}
                 </Col>
 
-                <Col xs={24} sm={8}>
+                <Col xs={24} sm={6}>
                   <label style={labelStyle}>Gender Policy</label>
                   <Select
                     value={formData.genderAllowed}
@@ -2132,6 +2316,19 @@ export const Register = () => {
                     <Option value="Unisex">Unisex (All Welcome)</Option>
                     <Option value="Men Only">Men Only</Option>
                     <Option value="Women Only">Women Only</Option>
+                  </Select>
+                </Col>
+
+                <Col xs={24} sm={6}>
+                  <label style={labelStyle}>Highlight Badge</label>
+                  <Select
+                    value={formData.badgeText || 'Trending'}
+                    onChange={(val) => updateField('badgeText', val)}
+                    style={{ width: '100%', height: 44 }}
+                  >
+                    {BADGE_OPTIONS.map((b) => (
+                      <Option key={b} value={b}>{b}</Option>
+                    ))}
                   </Select>
                 </Col>
               </Row>
@@ -2175,7 +2372,7 @@ export const Register = () => {
                     </div>
                   ) : (
                     <Upload.Dragger
-                      accept="image/*"
+                      accept="image/jpeg,image/png,image/webp"
                       showUploadList={false}
                       beforeUpload={handleLogoUpload}
                       style={{
@@ -2231,7 +2428,7 @@ export const Register = () => {
                     </div>
                   ) : (
                     <Upload.Dragger
-                      accept="image/*"
+                      accept="image/jpeg,image/png,image/webp"
                       showUploadList={false}
                       beforeUpload={handleCoverUpload}
                       style={{
@@ -2282,7 +2479,7 @@ export const Register = () => {
                   }}
                 >
                   <Upload
-                    accept="image/*"
+                    accept="image/jpeg,image/png,image/webp"
                     showUploadList={false}
                     beforeUpload={handleFacilityPhotoUpload}
                   >
@@ -2658,7 +2855,7 @@ export const Register = () => {
                       <Input
                         placeholder="Add gym rule..."
                         value={newRuleInput}
-                        onChange={(e) => setNewRuleInput(e.target.value)}
+                        onChange={(e) => setNewRuleInput(stripEmojis(e.target.value))}
                         style={{ height: 34, borderRadius: 6 }}
                         onPressEnter={() => {
                           if (newRuleInput.trim()) {
@@ -2704,7 +2901,7 @@ export const Register = () => {
                       <Input
                         placeholder="Add safety measure..."
                         value={newSafetyInput}
-                        onChange={(e) => setNewSafetyInput(e.target.value)}
+                        onChange={(e) => setNewSafetyInput(stripEmojis(e.target.value))}
                         style={{ height: 34, borderRadius: 6 }}
                         onPressEnter={() => {
                           if (newSafetyInput.trim()) {
@@ -2758,10 +2955,12 @@ export const Register = () => {
                   </label>
                   <Select
                     showSearch
+                    size="large"
                     optionFilterProp="children"
                     placeholder="Select bank"
-                    value={formData.bankName}
-                    style={getInputStyle('bankName')}
+                    value={formData.bankName || undefined}
+                    status={touched.bankName && errors.bankName ? 'error' : ''}
+                    style={{ width: '100%', height: 44 }}
                     onChange={(bankName) => {
                       updateField('bankName', bankName);
                       updateField('ifscCode', getBankByName(bankName)?.ifscPrefix || '');
@@ -2784,6 +2983,7 @@ export const Register = () => {
                     value={formData.accountNumber}
                     maxLength={18}
                     inputMode="numeric"
+                    onKeyDown={handleNumericKeyDown}
                     onChange={(e) => updateField('accountNumber', e.target.value.replace(/\D/g, '').slice(0, 18))}
                     onBlur={() => markFieldTouched('accountNumber')}
                     style={getInputStyle('accountNumber')}
@@ -2800,6 +3000,7 @@ export const Register = () => {
                     value={formData.confirmAccountNumber}
                     maxLength={18}
                     inputMode="numeric"
+                    onKeyDown={handleNumericKeyDown}
                     onChange={(e) => updateField('confirmAccountNumber', e.target.value.replace(/\D/g, '').slice(0, 18))}
                     onBlur={() => markFieldTouched('confirmAccountNumber')}
                     style={getInputStyle('confirmAccountNumber')}
@@ -2843,8 +3044,10 @@ export const Register = () => {
                     placeholder="e.g. apexfitness@okaxis"
                     value={formData.upiId}
                     onChange={(e) => updateField('upiId', e.target.value)}
+                    onBlur={() => markFieldTouched('upiId')}
                     style={getInputStyle('upiId')}
                   />
+                  {renderFieldError('upiId')}
                 </Col>
               </Row>
 

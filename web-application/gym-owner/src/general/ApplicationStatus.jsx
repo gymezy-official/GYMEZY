@@ -123,6 +123,7 @@ export const ApplicationStatus = () => {
   const [editForm] = Form.useForm();
   const [savingEdit, setSavingEdit] = useState(false);
   const [editFacilities, setEditFacilities] = useState([]);
+  const [editAmenities, setEditAmenities] = useState([]);
   const [editWorkouts, setEditWorkouts] = useState([]);
   const [editLogo, setEditLogo] = useState('');
   const [editCoverPhoto, setEditCoverPhoto] = useState('');
@@ -184,6 +185,8 @@ export const ApplicationStatus = () => {
     try {
       await apiClient.post(`/gyms/${gymId}/resubmit`, {
         notes: resubmitNotes,
+        resubmissionNote: resubmitNotes,
+        description: resubmitNotes,
       });
       messageApi.success('Application resubmitted successfully. Status updated to Pending Approval.');
       setResubmitModalOpen(false);
@@ -208,6 +211,7 @@ export const ApplicationStatus = () => {
     setEditResubmitFlag(isOnHold || isRejected);
     setEditAdminNotes('');
     setEditFacilities(Array.isArray(gym.facilities) ? [...gym.facilities] : []);
+    setEditAmenities(Array.isArray(gym.amenities) ? [...gym.amenities] : []);
     setEditWorkouts(Array.isArray(gym.workouts) ? [...gym.workouts] : []);
 
     const existingLogo = typeof gym.logo === 'string' ? gym.logo : gym.logo?.fileData || '';
@@ -252,7 +256,6 @@ export const ApplicationStatus = () => {
       eveningClose: gym.openingHours?.eveningClose || '10:30 PM',
 
       singleSessionPrice: gym.singleSessionPrice || gym.pricingPlans?.singleSession || 199,
-      weeklyPassPrice: gym.pricingPlans?.weeklyPass || 799,
       monthlyPrice: gym.pricingPlans?.monthly || 1999,
       quarterlyPrice: gym.pricingPlans?.quarterly || 4999,
       annualPrice: gym.pricingPlans?.annual || 14999,
@@ -298,12 +301,14 @@ export const ApplicationStatus = () => {
           isOpenHolidays: values.isOpenHolidays !== false,
         },
         facilities: editFacilities,
+        amenities: editAmenities,
         workouts: editWorkouts,
         logo: editLogo,
         coverPhoto: editCoverPhoto || editLogo,
         galleryPhotos: editGalleryPhotos,
         resubmit: editResubmitFlag,
         resubmitNotes: editAdminNotes,
+        resubmissionNote: editAdminNotes,
       };
 
       const res = await apiClient.put(`/gyms/${gymId}`, payload);
@@ -739,16 +744,22 @@ export const ApplicationStatus = () => {
           </div>
         </div>
 
-        {/* ADMIN NOTE BANNER (ON HOLD / REJECTED / PREVIOUS REMARKS) */}
-        {adminRemark && (
+        {/* 1. ADMIN REJECTION / HOLD FEEDBACK BANNER */}
+        {Boolean(
+          gym.rejectionReason ||
+          gym.rejectionNote ||
+          isOnHold ||
+          isRejected ||
+          (adminRemark && adminRemark !== 'Approved and published by Super Admin')
+        ) && (
           <div
             style={{
-              padding: '16px 20px',
+              padding: '18px 22px',
               borderRadius: 8,
               backgroundColor: surfaceBg,
               border: `1px solid ${borderCol}`,
-              borderLeft: `4px solid ${isOnHold ? '#fa8c16' : isRejected ? '#ef4444' : '#2563eb'}`,
-              marginBottom: 32,
+              borderLeft: `5px solid ${isOnHold ? '#fa8c16' : isRejected ? '#ef4444' : '#2563eb'}`,
+              marginBottom: 24,
             }}
           >
             <div
@@ -757,24 +768,32 @@ export const ApplicationStatus = () => {
                 justifyContent: 'space-between',
                 alignItems: 'center',
                 flexWrap: 'wrap',
-                gap: 8,
-                marginBottom: 6,
+                gap: 10,
+                marginBottom: 10,
               }}
             >
-              <div
-                style={{
-                  fontSize: 11,
-                  fontWeight: 700,
-                  color: isOnHold ? '#fa8c16' : isRejected ? '#ef4444' : '#2563eb',
-                  letterSpacing: '0.5px',
-                  textTransform: 'uppercase',
-                }}
-              >
-                {isOnHold
-                  ? 'Administrator Note — On Hold'
-                  : isRejected
-                  ? 'Administrator Note — Changes Required'
-                  : 'Administrator Note'}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: isOnHold ? '#fa8c16' : isRejected ? '#ef4444' : '#2563eb',
+                    letterSpacing: '0.5px',
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  {isOnHold
+                    ? 'Administrator Notice — Application On Hold'
+                    : isRejected
+                    ? 'Administrator Notice — Changes Required / Rejection'
+                    : 'Administrator Note'}
+                </span>
+
+                {gym.rejectionReason && (
+                  <Tag color={isOnHold ? 'orange' : 'error'} style={{ fontWeight: 700, fontSize: 12 }}>
+                    Reason: {gym.rejectionReason}
+                  </Tag>
+                )}
               </div>
 
               <div style={{ display: 'flex', gap: 8 }}>
@@ -807,14 +826,72 @@ export const ApplicationStatus = () => {
                       borderColor: isOnHold ? '#fa8c16' : '#2563eb',
                     }}
                   >
-                    Resubmit Now
+                    Resubmit Application
                   </Button>
                 )}
               </div>
             </div>
 
-            <div style={{ fontSize: 13, color: textPrimary, lineHeight: 1.5 }}>
-              {adminRemark}
+            <div
+              style={{
+                fontSize: 13,
+                color: textPrimary,
+                lineHeight: 1.6,
+                backgroundColor: isDarkMode ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.7)',
+                padding: '10px 14px',
+                borderRadius: 6,
+                border: `1px dashed ${isOnHold ? '#fde68a' : '#fecaca'}`,
+              }}
+            >
+              <strong style={{ color: isOnHold ? '#d97706' : '#dc2626' }}>Admin Feedback: </strong>
+              {gym.rejectionNote || gym.remark || adminRemark || 'Please review the requested changes and update your details.'}
+            </div>
+          </div>
+        )}
+
+        {/* 2. PARTNER RESUBMISSION NOTE BANNER */}
+        {Boolean(gym.resubmissionNote) && (
+          <div
+            style={{
+              padding: '16px 20px',
+              borderRadius: 8,
+              backgroundColor: isDarkMode ? 'rgba(59, 130, 246, 0.08)' : '#eff6ff',
+              border: '1px solid #bfdbfe',
+              borderLeft: '5px solid #2563eb',
+              marginBottom: 24,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <CheckCircleFilled style={{ fontSize: 16, color: '#2563eb' }} />
+                <span style={{ fontWeight: 700, fontSize: 13, color: textPrimary }}>
+                  Your Resubmission Explanation & Notes
+                </span>
+                <Tag color="processing" style={{ fontWeight: 700 }}>
+                  Awaiting Super Admin Review
+                </Tag>
+              </div>
+              {gym.resubmittedAt && (
+                <span style={{ fontSize: 12, color: textMuted }}>
+                  Resubmitted on: {new Date(gym.resubmittedAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+                </span>
+              )}
+            </div>
+            <div
+              style={{
+                fontSize: 13,
+                color: textPrimary,
+                backgroundColor: isDarkMode ? 'rgba(0,0,0,0.25)' : '#ffffff',
+                padding: '10px 14px',
+                borderRadius: 6,
+                border: '1px solid #dbeafe',
+                lineHeight: 1.5,
+              }}
+            >
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#2563eb', marginBottom: 4 }}>
+                Changes Submitted by You:
+              </div>
+              {gym.resubmissionNote}
             </div>
           </div>
         )}
@@ -1044,13 +1121,6 @@ export const ApplicationStatus = () => {
               </div>
 
               <div>
-                <div style={{ color: textMuted, fontSize: 11, marginBottom: 2 }}>Weekly Pass</div>
-                <div style={{ fontWeight: 700, fontSize: 15, color: textPrimary }}>
-                  ₹{gym.pricingPlans?.weeklyPass || 799}
-                </div>
-              </div>
-
-              <div>
                 <div style={{ color: textMuted, fontSize: 11, marginBottom: 2 }}>Monthly Pass</div>
                 <div style={{ fontWeight: 700, fontSize: 15, color: textPrimary }}>
                   ₹{gym.pricingPlans?.monthly || 1999}
@@ -1126,6 +1196,23 @@ export const ApplicationStatus = () => {
                       {f}
                     </Tag>
                   ))}
+                </div>
+              </div>
+
+              <div>
+                <div style={{ color: textMuted, fontSize: 11, marginBottom: 8, textTransform: 'uppercase', fontWeight: 600 }}>
+                  Active Amenities ({gym.amenities?.length || 0})
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {Array.isArray(gym.amenities) && gym.amenities.length > 0 ? (
+                    gym.amenities.map((a) => (
+                      <Tag key={a} color="cyan" style={{ borderRadius: 4, fontWeight: 500, margin: 0 }}>
+                        {a}
+                      </Tag>
+                    ))
+                  ) : (
+                    <span style={{ fontSize: 12, color: textMuted }}>None selected</span>
+                  )}
                 </div>
               </div>
 
@@ -1584,12 +1671,6 @@ export const ApplicationStatus = () => {
                       </Col>
 
                       <Col xs={24} sm={12}>
-                        <Form.Item label="Weekly Pass Price (₹)" name="weeklyPassPrice">
-                          <InputNumber prefix="₹" style={{ width: '100%' }} />
-                        </Form.Item>
-                      </Col>
-
-                      <Col xs={24} sm={12}>
                         <Form.Item label="Monthly Membership Price (₹)" name="monthlyPrice">
                           <InputNumber prefix="₹" style={{ width: '100%' }} />
                         </Form.Item>
@@ -1644,6 +1725,36 @@ export const ApplicationStatus = () => {
                           >
                             {isSelected ? '✓ ' : '+ '}
                             {f}
+                          </Tag>
+                        );
+                      })}
+                    </div>
+
+                    <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
+                      Select Member Amenities:
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
+                      {AMENITY_OPTIONS.map((a) => {
+                        const isSelected = editAmenities.includes(a);
+                        return (
+                          <Tag
+                            key={a}
+                            onClick={() => {
+                              setEditAmenities((prev) =>
+                                prev.includes(a) ? prev.filter((i) => i !== a) : [...prev, a]
+                              );
+                            }}
+                            color={isSelected ? 'cyan' : 'default'}
+                            style={{
+                              cursor: 'pointer',
+                              padding: '4px 10px',
+                              borderRadius: 6,
+                              fontSize: 12,
+                              fontWeight: isSelected ? 700 : 500,
+                            }}
+                          >
+                            {isSelected ? '✓ ' : '+ '}
+                            {a}
                           </Tag>
                         );
                       })}
@@ -1779,8 +1890,10 @@ export const ApplicationStatus = () => {
                         <Form.Item label="Bank Name" name="bankName">
                           <Select
                             showSearch
+                            size="large"
                             optionFilterProp="children"
                             placeholder="Select bank"
+                            style={{ width: '100%' }}
                             onChange={(bankName) => {
                               editForm.setFieldValue('ifscCode', getBankByName(bankName)?.ifscPrefix || '');
                             }}
